@@ -11,7 +11,7 @@ int main(int argc, char *argv[]) {
     printf("  \033[1;32m[INIT]\033[0m Spawning interactive user shell (/bin/sh)...\n");
     printf("\033[1;36m========================================================\033[0m\n\n");
 
-    char *sh_argv[] = {"/bin/startx", NULL};
+    char *sh_argv[] = {"/bin/sh", NULL};
     char *sh_envp[] = {"PATH=/bin:/usr/bin", "USER=root", "TERM=xterm-256color", "HOME=/root", "SHELL=/bin/sh", NULL};
     execve(sh_argv[0], sh_argv, sh_envp);
 

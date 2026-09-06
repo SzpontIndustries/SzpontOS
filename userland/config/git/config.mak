@@ -9,10 +9,18 @@ gitexecdir = /usr/libexec/git-core
 mandir = /usr/share/man
 htmldir = /usr/share/doc/git-doc
 
-# Disable unsupported/unnecessary features and host headers
-NO_OPENSSL = YesPlease
-BLK_SHA1 = YesPlease
-NO_CURL = YesPlease
+# Enable OpenSSL & cURL
+NEEDS_CRYPTO_WITH_SSL = 1
+NEEDS_SSL_WITH_CRYPTO = 1
+OPENSSL_SHA1 = 1
+OPENSSL_SHA256 = 1
+CURL_CONFIG = true
+CURL_CFLAGS =
+CURL_LDFLAGS = -lcurl -lssl -lcrypto -lz
+OPENSSL_LINK =
+OPENSSL_LIBSSL = -lssl -lcrypto
+LIB_4_CRYPTO = -lcrypto
+EXTLIBS += -lcurl -lssl -lcrypto -lz -lc -lm
 NO_EXPAT = YesPlease
 NO_TCLTK = YesPlease
 NO_GETTEXT = YesPlease

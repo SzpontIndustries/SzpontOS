@@ -11,8 +11,11 @@
 
 #define FD_SETSIZE 1024
 
+typedef unsigned long fd_mask;
+#define NFDBITS (8 * (int)sizeof(fd_mask))
+
 typedef struct {
-    unsigned long fds_bits[FD_SETSIZE / (8 * sizeof(unsigned long))];
+    fd_mask fds_bits[FD_SETSIZE / (8 * sizeof(unsigned long))];
 } fd_set;
 
 #define FD_ZERO(set)                                                                                                   \
@@ -35,6 +38,8 @@ typedef struct {
 #define _SIGSET_T_DECLARED
 typedef unsigned long sigset_t;
 #endif
+
+struct timespec;
 
 int select(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, struct timeval *timeout);
 int pselect(int nfds, fd_set *readfds, fd_set *writefds, fd_set *exceptfds, const struct timespec *timeout,

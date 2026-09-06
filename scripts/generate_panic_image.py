@@ -30,8 +30,11 @@ def main():
     tmp_bmp = "/tmp/szpont_panic_temp.bmp"
 
     # Convert JPG to BMP using sips on macOS or convert/magick
-    res = subprocess.run(["sips", "-s", "format", "bmp", jpg_path, "--out", tmp_bmp], capture_output=True)
-    if res.returncode != 0:
+    try:
+        res = subprocess.run(["sips", "-s", "format", "bmp", jpg_path, "--out", tmp_bmp], capture_output=True)
+    except FileNotFoundError:
+        res = None
+    if res is None or res.returncode != 0:
         res = subprocess.run(["convert", jpg_path, tmp_bmp], capture_output=True)
 
     with open(tmp_bmp, "rb") as f:
