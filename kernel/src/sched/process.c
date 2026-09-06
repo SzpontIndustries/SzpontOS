@@ -498,8 +498,10 @@ int process_kill(pid_t pid, int sig) {
     }
 
     /* Process Group or Broadcast Killing */
+    pid_t targets[128];
+    int target_count = 0;
+
     spinlock_acquire(&g_process_lock);
-    int sent_count = 0;
     list_node_t *pos;
     list_for_each(pos, &g_process_list) {
         process_t *p = container_of(pos, process_t, proc_list_node);
@@ -515,16 +517,22 @@ int process_kill(pid_t pid, int sig) {
             target = true;
         }
 
-        if (target) {
-            spinlock_release(&g_process_lock);
-            process_send_signal(p, sig);
-            spinlock_acquire(&g_process_lock);
-            sent_count++;
+        if (target && target_count < 128) {
+            targets[target_count++] = p->pid;
         }
     }
     spinlock_release(&g_process_lock);
 
-    if (sent_count == 0 && pid <= 0) {
+    int sent_count = 0;
+    for (int i = 0; i < target_count; i++) {
+        process_t *p = process_get_by_pid(targets[i]);
+        if (p && p->status == PROCESS_ACTIVE) {
+            process_send_signal(p, sig);
+            sent_count++;
+        }
+    }
+
+    if (sent_count == 0 && pid == 0) {
         /* Fall back to foreground process if no group found */
         process_t *fg = process_get_foreground();
         if (fg) {
@@ -532,6 +540,11 @@ int process_kill(pid_t pid, int sig) {
         }
         return -1;
     }
+
+    if (pid == -1) {
+        return 0; /* POSIX broadcast kill succeeds even if no other active processes remain */
+    }
+
     return (sent_count > 0) ? 0 : -1;
 }
 

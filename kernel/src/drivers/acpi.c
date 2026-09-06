@@ -4,6 +4,8 @@
  */
 
 #include <drivers/acpi.h>
+#include <drivers/pci.h>
+#include <arch/x86_64/io.h>
 #include <limine.h>
 #include <mm/vmm.h>
 #include <mm/heap.h>
@@ -18,6 +20,9 @@ static acpi_sdt_header_t *g_rsdt_or_xsdt = NULL;
 static bool g_use_xsdt = false;
 static acpi_fadt_t *g_fadt = NULL;
 static acpi_madt_t *g_madt = NULL;
+static uint16_t g_slp_typa = 0;
+static uint16_t g_slp_typb = 0;
+static bool g_s5_found = false;
 
 static void acpi_map_region(uintptr_t phys, size_t len) {
     uintptr_t start = phys & ~0xFFFULL;
@@ -105,6 +110,89 @@ uint32_t acpi_get_pm1a_cnt(void) {
     return g_fadt ? g_fadt->pm1a_cnt_blk : 0;
 }
 
+static uint16_t parse_aml_int(const uint8_t **p, const uint8_t *end) {
+    if (*p >= end)
+        return 0;
+    uint8_t op = **p;
+    (*p)++;
+    if (op == 0x00)
+        return 0;
+    if (op == 0x01)
+        return 1;
+    if (op == 0xFF)
+        return 0xFF;
+    if (op == 0x0A) { /* BytePrefix */
+        if (*p >= end)
+            return 0;
+        uint8_t val = **p;
+        (*p)++;
+        return val;
+    }
+    if (op == 0x0B) { /* WordPrefix */
+        if (*p + 1 >= end)
+            return 0;
+        uint16_t val = (uint16_t)(*p)[0] | ((uint16_t)(*p)[1] << 8);
+        (*p) += 2;
+        return val;
+    }
+    if (op == 0x0C) { /* DWordPrefix */
+        if (*p + 3 >= end)
+            return 0;
+        uint32_t val = (uint32_t)(*p)[0] | ((uint32_t)(*p)[1] << 8) |
+                       ((uint32_t)(*p)[2] << 16) | ((uint32_t)(*p)[3] << 24);
+        (*p) += 4;
+        return (uint16_t)val;
+    }
+    return 0;
+}
+
+static void acpi_parse_s5(acpi_sdt_header_t *dsdt) {
+    if (!dsdt || dsdt->length <= sizeof(acpi_sdt_header_t))
+        return;
+
+    const uint8_t *data = (const uint8_t *)dsdt + sizeof(acpi_sdt_header_t);
+    size_t len = dsdt->length - sizeof(acpi_sdt_header_t);
+    const uint8_t *end = data + len;
+
+    for (size_t i = 0; i + 4 < len; i++) {
+        if (data[i] == '_' && data[i + 1] == 'S' && data[i + 2] == '5' && data[i + 3] == '_') {
+            bool valid = false;
+            if (i >= 1 && data[i - 1] == 0x08) {
+                valid = true;
+            } else if (i >= 2 && data[i - 2] == 0x08 && data[i - 1] == '\\') {
+                valid = true;
+            }
+
+            if (valid) {
+                const uint8_t *ptr = &data[i + 4];
+                if (ptr < end && *ptr == 0x12) { /* PackageOp */
+                    ptr++;
+                    if (ptr >= end)
+                        break;
+                    uint8_t lead = *ptr;
+                    int pkg_bytes = (lead >> 6) & 0x03;
+                    ptr += (1 + pkg_bytes);
+                    if (ptr >= end)
+                        break;
+
+                    uint8_t num_elements = *ptr++;
+                    if (num_elements >= 1) {
+                        g_slp_typa = parse_aml_int(&ptr, end);
+                    }
+                    if (num_elements >= 2) {
+                        g_slp_typb = parse_aml_int(&ptr, end);
+                    }
+                    g_s5_found = true;
+                    klog_info("ACPI: Found \\_S5_ package in DSDT (SLP_TYPa: 0x%02x, SLP_TYPb: 0x%02x)",
+                              g_slp_typa, g_slp_typb);
+                    return;
+                }
+            }
+        }
+    }
+    klog_warn("ACPI: \\_S5_ package not found in DSDT, using standard fallbacks");
+}
+
 void acpi_init(void) {
     if (!g_rsdp_request.response || !g_rsdp_request.response->address) {
         klog_warn("ACPI: Bootloader did not provide RSDP address");
@@ -161,8 +249,28 @@ void acpi_init(void) {
         char oem[7] = {0};
         memcpy(oem, g_fadt->header.oem_id, 6);
         bool has_8042 = acpi_has_8042_controller();
-        klog_info("ACPI: FADT (FACP) found (OEM: %s, 8042 PS/2 Present: %s)", oem,
-                  has_8042 ? "YES" : "NO (USB/xHCI native platform)");
+        bool has_reset = (g_fadt->header.length >= 129) && ((g_fadt->flags & (1 << 10)) != 0);
+        klog_info("ACPI: FADT (FACP) found (OEM: %s, 8042 PS/2: %s, Reset Reg: %s)", oem,
+                  has_8042 ? "YES" : "NO", has_reset ? "YES" : "NO");
+
+        /* Map and parse DSDT */
+        uintptr_t dsdt_phys = g_fadt->dsdt;
+        if (g_fadt->header.length >= 148 && g_fadt->header.revision >= 2 && g_fadt->x_dsdt) {
+            dsdt_phys = (uintptr_t)g_fadt->x_dsdt;
+        }
+
+        if (dsdt_phys) {
+            acpi_map_region(dsdt_phys, sizeof(acpi_sdt_header_t));
+            acpi_sdt_header_t *dsdt = (acpi_sdt_header_t *)PHYS_TO_VIRT(dsdt_phys);
+            if (memcmp(dsdt->signature, "DSDT", 4) == 0) {
+                acpi_map_region(dsdt_phys, dsdt->length);
+                klog_info("ACPI: DSDT found at phys 0x%016lx (Length: %u)",
+                          (unsigned long)dsdt_phys, dsdt->length);
+                acpi_parse_s5(dsdt);
+            } else {
+                klog_warn("ACPI: Invalid DSDT signature at phys 0x%016lx", (unsigned long)dsdt_phys);
+            }
+        }
     }
 
     /* Find and cache MADT (APIC) */
@@ -185,3 +293,98 @@ void acpi_init(void) {
 
     klog_info("ACPI: Hardware configuration parsed successfully!");
 }
+
+bool acpi_reboot(void) {
+    if (!g_fadt)
+        return false;
+
+    /* Check length and RESET_REG_SUP flag (bit 10) */
+    if (g_fadt->header.length < 129 || !(g_fadt->flags & (1 << 10))) {
+        return false;
+    }
+
+    acpi_gas_t *reg = &g_fadt->reset_reg;
+    uint8_t val = g_fadt->reset_value;
+
+    klog_info("ACPI: Triggering ACPI hardware reset (Space: %u, Addr: 0x%016lx, Val: 0x%02x)",
+              reg->address_space, (unsigned long)reg->address, val);
+
+    if (reg->address_space == 1) {
+        /* System I/O space */
+        outb((uint16_t)reg->address, val);
+        return true;
+    } else if (reg->address_space == 0) {
+        /* System Memory (MMIO) */
+        uintptr_t phys = (uintptr_t)reg->address;
+        acpi_map_region(phys, 4);
+        volatile uint8_t *ptr = (volatile uint8_t *)PHYS_TO_VIRT(phys);
+        *ptr = val;
+        return true;
+    } else if (reg->address_space == 2) {
+        /* PCI Configuration Space */
+        uint8_t bus = (reg->address >> 48) & 0xFF;
+        uint8_t dev = (reg->address >> 32) & 0x1F;
+        uint8_t func = (reg->address >> 16) & 0x07;
+        uint8_t offset = reg->address & 0xFF;
+        pci_write8(bus, dev, func, offset, val);
+        return true;
+    }
+
+    return false;
+}
+
+bool acpi_poweroff(void) {
+    if (!g_fadt)
+        return false;
+
+    uint32_t pm1a_cnt = g_fadt->pm1a_cnt_blk;
+    uint32_t pm1b_cnt = g_fadt->pm1b_cnt_blk;
+
+    if (!pm1a_cnt)
+        return false;
+
+    /* 1. Ensure ACPI mode is enabled via SMI command port if SCI_EN is not set */
+    if ((inw((uint16_t)pm1a_cnt) & 1) == 0) {
+        if (g_fadt->smi_cmd && g_fadt->acpi_enable) {
+            klog_info("ACPI: Enabling ACPI mode (SMI port 0x%x <- 0x%x)...",
+                      g_fadt->smi_cmd, g_fadt->acpi_enable);
+            outb((uint16_t)g_fadt->smi_cmd, g_fadt->acpi_enable);
+            for (int t = 0; t < 1000; t++) {
+                if (inw((uint16_t)pm1a_cnt) & 1)
+                    break;
+                for (volatile int d = 0; d < 10000; d++);
+            }
+        }
+    }
+
+    /* 2. Determine sleep type values */
+    uint16_t slp_a = g_s5_found ? g_slp_typa : 5;
+    uint16_t slp_b = g_s5_found ? g_slp_typb : 5;
+
+    klog_info("ACPI: S5 poweroff write to PM1a (port 0x%x, val 0x%x)...",
+              pm1a_cnt, (uint16_t)((slp_a << 10) | (1 << 13)));
+
+    /* 3. Send S5 sleep command (SLP_TYP in bits 10..12, SLP_EN in bit 13) */
+    outw((uint16_t)pm1a_cnt, (uint16_t)((slp_a << 10) | (1 << 13)));
+    if (pm1b_cnt) {
+        outw((uint16_t)pm1b_cnt, (uint16_t)((slp_b << 10) | (1 << 13)));
+    }
+
+    for (volatile int d = 0; d < 5000000; d++);
+
+    /* 4. Fallback alternative SLP_TYP values (7, 0) */
+    outw((uint16_t)pm1a_cnt, (uint16_t)((7 << 10) | (1 << 13)));
+    if (pm1b_cnt) {
+        outw((uint16_t)pm1b_cnt, (uint16_t)((7 << 10) | (1 << 13)));
+    }
+    for (volatile int d = 0; d < 5000000; d++);
+
+    outw((uint16_t)pm1a_cnt, (uint16_t)(1 << 13));
+    if (pm1b_cnt) {
+        outw((uint16_t)pm1b_cnt, (uint16_t)(1 << 13));
+    }
+    for (volatile int d = 0; d < 5000000; d++);
+
+    return true;
+}
+

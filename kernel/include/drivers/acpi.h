@@ -40,6 +40,15 @@ typedef struct __attribute__((packed)) {
     uint32_t creator_revision;
 } acpi_sdt_header_t;
 
+/* ACPI Generic Address Structure (GAS) - 12 bytes */
+typedef struct __attribute__((packed)) {
+    uint8_t address_space; /* 0: System Memory (MMIO), 1: System I/O, 2: PCI Config Space */
+    uint8_t bit_width;
+    uint8_t bit_offset;
+    uint8_t access_size;   /* 0: Undefined, 1: Byte, 2: Word, 3: Dword, 4: Qword */
+    uint64_t address;
+} acpi_gas_t;
+
 /* RSDT (Root System Description Table - 32-bit pointers) */
 typedef struct __attribute__((packed)) {
     acpi_sdt_header_t header;
@@ -93,8 +102,8 @@ typedef struct __attribute__((packed)) {
     uint16_t ia_pc_boot_arch; /* Bit 1 = 8042 controller present */
     uint8_t reserved2;
     uint32_t flags;
-    /* Reset register */
-    uint8_t reset_reg[12];
+    /* Reset register (ACPI 2.0+) */
+    acpi_gas_t reset_reg;
     uint8_t reset_value;
     uint8_t reserved3[3];
     uint64_t x_firmware_ctrl;
@@ -140,5 +149,7 @@ uint32_t acpi_get_lapic_address(void);
 uint32_t acpi_get_smi_cmd_port(void);
 uint8_t acpi_get_enable_cmd(void);
 uint32_t acpi_get_pm1a_cnt(void);
+bool acpi_reboot(void);
+bool acpi_poweroff(void);
 
 #endif /* SZPONTOS_DRIVERS_ACPI_H */

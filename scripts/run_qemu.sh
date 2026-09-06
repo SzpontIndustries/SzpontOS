@@ -57,6 +57,9 @@ for arg in "$@"; do
             echo "[*] Włączono realistyczne zegary i wirtualny licznik instrukcji (-icount shift=auto)"
             EXTRA_FLAGS+=("-icount" "shift=auto,sleep=on" "-rtc" "base=utc,clock=vm")
             ;;
+        --no-shutdown)
+            EXTRA_FLAGS+=("-no-shutdown")
+            ;;
         *.iso)
             ISO_PATH="$arg"
             ;;
@@ -116,5 +119,4 @@ exec $QEMU_CMD \
     -display "$DISPLAY_OPT" \
     -cdrom "$ISO_PATH" \
     -serial stdio \
-    -no-shutdown \
     "${EXTRA_FLAGS[@]}"

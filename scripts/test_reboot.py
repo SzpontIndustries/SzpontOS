@@ -13,15 +13,12 @@ import re
 def test_command(cmd, expected_log):
     qemu_cmd = [
         "qemu-system-x86_64",
-        "-M", "pc",
+        "-M", "q35",
         "-cpu", "max",
         "-m", "512M",
         "-display", "none",
         "-cdrom", "build/szpontos.iso",
-        "-drive", "file=build/disk.img,format=raw,if=ide,index=0,media=disk,snapshot=on,file.locking=off",
-        "-serial", "stdio",
-        "-no-reboot",
-        "-no-shutdown"
+        "-serial", "stdio"
     ]
 
     print(f"[TEST] Testowanie polecenia '{cmd}' w SzpontOS...")
@@ -49,7 +46,7 @@ def test_command(cmd, expected_log):
 
                 clean_chunk = re.sub(r'\x1b\[[0-9;?]*[a-zA-Z]', '', output)
 
-                if not commands_sent and "root@szpontos-box" in clean_chunk and "Type 'help'" in clean_chunk:
+                if not commands_sent and "root@szpontos-box:/" in clean_chunk:
                     time.sleep(0.5)
                     print(f"\n[TEST] Wysyłanie polecenia {cmd}...")
                     proc.stdin.write((cmd + "\n").encode('utf-8'))
@@ -57,7 +54,7 @@ def test_command(cmd, expected_log):
                     commands_sent = True
 
                 if expected_log in clean_chunk:
-                    time.sleep(1.0)
+                    time.sleep(0.5)
                     break
 
     finally:

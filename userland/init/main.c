@@ -439,6 +439,7 @@ static init_state_t state_multi_user(void) {
                 return STATE_DEATH;
             } else if (pending & (1U << SIGTERM)) {
                 printf(COLOR_YELLOW "[INIT] Received SIGTERM: Transitioning to single-user mode..." COLOR_RESET "\n");
+                g_reboot_cmd = 0;
                 return STATE_DEATH;
             } else if (pending & (1U << SIGTSTP)) {
                 printf(COLOR_YELLOW "[INIT] Received SIGTSTP: Entering catatonic mode (sessions paused)..." COLOR_RESET "\n");
@@ -449,44 +450,31 @@ static init_state_t state_multi_user(void) {
         /* Wait for any child process or orphan */
         int status = 0;
         pid_t pid = waitpid(-1, &status, 0);
-        if (pid < 0) {
-            if (errno == EINTR) {
-                continue; /* Interrupted by signal */
-            }
-            if (errno == ECHILD) {
-                /* No child processes at all: sleep briefly */
-                sleep(1);
-                continue;
-            }
-            sleep(1);
-            continue;
-        }
+        if (pid > 0) {
+            session_t *sp = find_session_by_pid(pid);
+            if (sp) {
+                sp->pid = 0;
+                time_t now = time(NULL);
 
-        /* Check if terminated process was a managed terminal session */
-        session_t *sp = find_session_by_pid(pid);
-        if (sp) {
-            sp->pid = 0;
-            time_t now = time(NULL);
+                if (now - sp->started < GETTY_SPACING) {
+                    sp->respawn_count++;
+                } else {
+                    sp->respawn_count = 0;
+                }
 
-            if (now - sp->started < GETTY_SPACING) {
-                sp->respawn_count++;
-            } else {
-                sp->respawn_count = 0;
-            }
+                if (sp->respawn_count >= GETTY_NSPACE) {
+                    printf(COLOR_RED "[INIT] Alert: Session on %s respawning too rapidly! Throttling for %d seconds." COLOR_RESET "\n",
+                           sp->device, GETTY_SLEEP);
+                    sleep(GETTY_SLEEP);
+                    sp->respawn_count = 0;
+                }
 
-            if (sp->respawn_count >= GETTY_NSPACE) {
-                printf(COLOR_RED "[INIT] Alert: Session on %s respawning too rapidly! Throttling for %d seconds." COLOR_RESET "\n",
-                       sp->device, GETTY_SLEEP);
-                sleep(GETTY_SLEEP);
-                sp->respawn_count = 0;
+                if (sp->flags & SE_ON) {
+                    printf(COLOR_YELLOW "[INIT] Session on %s (PID %d) terminated. Respawning..." COLOR_RESET "\n",
+                           sp->device, pid);
+                    start_session(sp);
+                }
             }
-
-            if (sp->flags & SE_ON) {
-                printf(COLOR_YELLOW "[INIT] Session on %s (PID %d) terminated. Respawning..." COLOR_RESET "\n",
-                       sp->device, pid);
-                start_session(sp);
-            }
-        } else {
             /* Orphaned child reaped successfully! */
         }
 
@@ -536,6 +524,15 @@ static init_state_t state_death(void) {
     printf("  " COLOR_BOLD COLOR_RED "[INIT] SHUTTING DOWN SYSTEM..." COLOR_RESET "\n");
     printf(COLOR_YELLOW "========================================================" COLOR_RESET "\n\n");
 
+    /* Ignore signals during shutdown sequence to prevent re-entrancy or state alteration */
+    signal(SIGINT, SIG_IGN);
+    signal(SIGTERM, SIG_IGN);
+    signal(SIGUSR1, SIG_IGN);
+    signal(SIGUSR2, SIG_IGN);
+    signal(SIGHUP, SIG_IGN);
+    signal(SIGTSTP, SIG_IGN);
+    signal(SIGCHLD, SIG_IGN);
+
     /* Step 1: Run /etc/rc.shutdown if present */
     struct stat st;
     if (stat(PATH_SHUTDOWN, &st) == 0) {
@@ -564,11 +561,11 @@ static init_state_t state_death(void) {
     printf(COLOR_YELLOW "[INIT] Sending SIGTERM to all active processes..." COLOR_RESET "\n");
     kill(-1, SIGTERM);
 
-    /* Grace period: wait up to 3 seconds for processes to terminate */
+    /* Grace period: wait up to 1.5 seconds for processes to terminate */
     for (int i = 0; i < 6; i++) {
         int status;
         while (waitpid(-1, &status, WNOHANG) > 0) {}
-        usleep(500000);
+        usleep(250000);
     }
 
     /* Step 4: Broadcast SIGKILL to all surviving processes */
@@ -577,7 +574,7 @@ static init_state_t state_death(void) {
     for (int i = 0; i < 2; i++) {
         int status;
         while (waitpid(-1, &status, WNOHANG) > 0) {}
-        usleep(250000);
+        usleep(100000);
     }
 
     /* Step 5: Sync filesystems to disk */
@@ -585,8 +582,7 @@ static init_state_t state_death(void) {
     sync();
 
     /* If SIGTERM requested transition to single user */
-    if (g_requested_signal == SIGTERM) {
-        g_requested_signal = 0;
+    if (g_reboot_cmd == 0) {
         return STATE_SINGLE_USER;
     }
 
