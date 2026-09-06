@@ -112,4 +112,14 @@ int sigaddset(sigset_t *set, int signum);
 int sigdelset(sigset_t *set, int signum);
 int sigismember(const sigset_t *set, int signum);
 
+typedef sighandler_t sig_t;
+#define SIG2STR_MAX 32
+
+extern const int sys_nsig;
+extern const char *const sys_signame[];
+extern const char *const sys_siglist[];
+
+int sig2str(int signum, char *str);
+int str2sig(const char *str, int *pnum);
+
 #endif /* _SIGNAL_H */

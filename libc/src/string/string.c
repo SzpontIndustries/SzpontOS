@@ -577,3 +577,22 @@ int ffsl(long int i) {
     return __builtin_ffsl(i);
 }
 
+char *strchrnul(const char *s, int c) {
+    char ch = (char)c;
+    while (*s && *s != ch)
+        s++;
+    return (char *)s;
+}
+
+void *memccpy(void *dest, const void *src, int c, size_t n) {
+    unsigned char *d = (unsigned char *)dest;
+    const unsigned char *s = (const unsigned char *)src;
+    unsigned char ch = (unsigned char)c;
+    for (size_t i = 0; i < n; i++) {
+        d[i] = s[i];
+        if (s[i] == ch)
+            return d + i + 1;
+    }
+    return NULL;
+}
+

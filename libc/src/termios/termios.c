@@ -71,3 +71,8 @@ int cfsetospeed(struct termios *termios_p, speed_t speed) {
     termios_p->c_ospeed = speed;
     return 0;
 }
+
+int tcsetsid(int fd, pid_t pid) {
+    (void)pid;
+    return ioctl(fd, TIOCSCTTY, (void *)0);
+}

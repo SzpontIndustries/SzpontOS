@@ -45,4 +45,7 @@ char *strsignal(int sig);
 int ffs(int i);
 int ffsl(long int i);
 
+char *strchrnul(const char *s, int c);
+void *memccpy(void *dest, const void *src, int c, size_t n);
+
 #endif /* _STRING_H */

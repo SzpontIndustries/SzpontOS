@@ -19,4 +19,16 @@
 #define MAXHOSTNAMELEN 256
 #endif
 
+#ifndef MAXLOGNAME
+#define MAXLOGNAME 33
+#endif
+
+#ifndef ALIGNBYTES
+#define ALIGNBYTES (sizeof(void *) - 1)
+#endif
+
+#ifndef ALIGN
+#define ALIGN(p) (((unsigned long)(p) + ALIGNBYTES) & ~ALIGNBYTES)
+#endif
+
 #endif /* _SYS_PARAM_H */

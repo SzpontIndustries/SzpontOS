@@ -1,0 +1,5 @@
+#!/bin/sh
+# /etc/rc.d/01_mountcritlocal -- Mount critical local filesystems
+
+echo "Checking and mounting critical local filesystems..."
+mkdir -p /tmp /var/run /var/log /proc /dev

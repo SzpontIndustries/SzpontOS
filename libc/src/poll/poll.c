@@ -15,3 +15,12 @@ int poll(struct pollfd *fds, nfds_t nfds, int timeout) {
     }
     return (int)ret;
 }
+
+int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *tmo_p, const sigset_t *sigmask) {
+    int timeout_ms = -1;
+    if (tmo_p) {
+        timeout_ms = (int)(tmo_p->tv_sec * 1000 + tmo_p->tv_nsec / 1000000);
+    }
+    (void)sigmask;
+    return poll(fds, nfds, timeout_ms);
+}

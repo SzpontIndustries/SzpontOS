@@ -944,3 +944,27 @@ int setlogmask(int mask) {
         g_syslog_mask = mask;
     return old;
 }
+
+int eaccess(const char *path, int mode) {
+    return access(path, mode);
+}
+
+pid_t wait3(int *wstatus, int options, struct rusage *rusage) {
+    (void)rusage;
+    return waitpid(-1, wstatus, options);
+}
+
+pid_t wait4(pid_t pid, int *wstatus, int options, struct rusage *rusage) {
+    (void)rusage;
+    return waitpid(pid, wstatus, options);
+}
+
+void *setmode(const char *mode_str) {
+    (void)mode_str;
+    return NULL;
+}
+
+mode_t getmode(const void *set, mode_t mode) {
+    (void)set;
+    return mode;
+}

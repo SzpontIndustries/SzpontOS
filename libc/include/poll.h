@@ -23,6 +23,10 @@ struct pollfd {
     short revents;
 };
 
+#include <signal.h>
+#include <time.h>
+
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);
+int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *tmo_p, const sigset_t *sigmask);
 
 #endif /* _POLL_H */

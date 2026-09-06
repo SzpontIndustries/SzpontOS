@@ -7,14 +7,15 @@
 #include <mm/vmm.h>
 #include <mm/shm.h>
 #include <fs/vfs.h>
+#include <fs/pipe.h>
 #include <kernel/string.h>
 #include <kernel/kprint.h>
 #include <kernel/spinlock.h>
 
 #define KERNEL_STACK_SIZE (16 * 1024)
 
-static pid_t g_next_pid = 1;
-static tid_t g_next_tid = 1;
+static pid_t g_next_pid = 0;
+static tid_t g_next_tid = 0;
 static list_node_t g_process_list = LIST_HEAD_INIT(g_process_list);
 static spinlock_t g_process_lock = SPINLOCK_INIT;
 static process_t *g_foreground_proc = NULL;
@@ -25,6 +26,8 @@ void process_init(void) {
     spinlock_init(&g_process_lock);
     list_init(&g_process_list);
     g_foreground_proc = NULL;
+    g_next_pid = 0;
+    g_next_tid = 0;
 }
 
 process_t *process_get_foreground(void) {
@@ -201,10 +204,31 @@ void process_exit(int exit_code) {
         g_foreground_proc = NULL;
     }
 
+    /* Reparent all children of exiting process to PID 1 (init) */
+    bool notify_init = false;
+    spinlock_acquire(&g_process_lock);
+    list_node_t *cpos;
+    list_for_each(cpos, &g_process_list) {
+        process_t *child = container_of(cpos, process_t, proc_list_node);
+        if (child->ppid == proc->pid) {
+            child->ppid = 1;
+            if (child->status == PROCESS_ZOMBIE) {
+                notify_init = true;
+            }
+        }
+    }
+    spinlock_release(&g_process_lock);
+
     if (proc->ppid > 0) {
         process_t *parent = process_get_by_pid(proc->ppid);
         if (parent) {
             process_send_signal(parent, SIGCHLD);
+        }
+    }
+    if (notify_init && proc->ppid != 1) {
+        process_t *init_proc = process_get_by_pid(1);
+        if (init_proc) {
+            process_send_signal(init_proc, SIGCHLD);
         }
     }
 
@@ -249,6 +273,21 @@ int process_send_signal(process_t *proc, int sig) {
                 g_foreground_proc = NULL;
             }
 
+            /* Reparent children to PID 1 */
+            bool notify_init = false;
+            list_node_t *cpos;
+            list_for_each(cpos, &g_process_list) {
+                process_t *child = container_of(cpos, process_t, proc_list_node);
+                if (child->ppid == proc->pid) {
+                    child->ppid = 1;
+                    if (child->status == PROCESS_ZOMBIE) {
+                        notify_init = true;
+                    }
+                }
+            }
+
+            pid_t ppid = proc->ppid;
+
             list_node_t *pos;
             list_for_each(pos, &proc->threads) {
                 thread_t *t = container_of(pos, thread_t, proc_node);
@@ -256,6 +295,20 @@ int process_send_signal(process_t *proc, int sig) {
             }
 
             spinlock_release(&g_process_lock);
+
+            if (ppid > 0) {
+                process_t *parent = process_get_by_pid(ppid);
+                if (parent) {
+                    process_send_signal(parent, SIGCHLD);
+                }
+            }
+            if (notify_init && ppid != 1) {
+                process_t *init_proc = process_get_by_pid(1);
+                if (init_proc) {
+                    process_send_signal(init_proc, SIGCHLD);
+                }
+            }
+
             if (proc == sched_get_current_process()) {
                 sched_yield();
             }
@@ -424,7 +477,8 @@ int process_sigpending(sigset_t *set) {
         return -1;
 
     spinlock_acquire(&g_process_lock);
-    *set = curr->pending_signals & curr->blocked_signals;
+    *set = curr->pending_signals;
+    curr->pending_signals = 0;
     spinlock_release(&g_process_lock);
     return 0;
 }
@@ -494,10 +548,21 @@ pid_t process_waitpid(pid_t pid, int *status, int options) {
         list_for_each_safe(pos, n, &g_process_list) {
             process_t *p = container_of(pos, process_t, proc_list_node);
             if (p->ppid == curr->pid) {
-                if (pid == -1 || p->pid == pid) {
+                bool pid_match = false;
+                if (pid > 0) {
+                    pid_match = (p->pid == pid);
+                } else if (pid == -1) {
+                    pid_match = true;
+                } else if (pid == 0) {
+                    pid_match = (p->pgid == curr->pgid);
+                } else { /* pid < -1 */
+                    pid_match = (p->pgid == -pid);
+                }
+
+                if (pid_match) {
                     has_children = true;
                     if (p->status == PROCESS_ACTIVE) {
-                        if (pid != -1) {
+                        if (pid > 0) {
                             g_foreground_proc = p;
                         }
                     } else if (p->status == PROCESS_ZOMBIE) {
@@ -517,17 +582,52 @@ pid_t process_waitpid(pid_t pid, int *status, int options) {
                                 f->refcount--;
                                 if (f->refcount == 0) {
                                     if (f->node && (f->node->flags == VFS_TYPE_PIPE) && f->node->device_data) {
-                                        kfree(f->node->device_data);
+                                        pipe_chan_t *chan = (pipe_chan_t *)f->node->device_data;
+                                        if (f->flags & O_WRONLY) {
+                                            chan->writers--;
+                                        } else {
+                                            chan->readers--;
+                                        }
+                                        if (chan->readers <= 0 && chan->writers <= 0) {
+                                            kfree(chan);
+                                        }
+                                        f->node->device_data = NULL;
                                         kfree(f->node);
+                                        f->node = NULL;
                                     }
                                     kfree(f);
                                 }
                             }
                         }
 
+                        /* Free child threads and their kernel stacks */
+                        list_node_t *tpos, *tnext;
+                        list_for_each_safe(tpos, tnext, &p->threads) {
+                            thread_t *t = container_of(tpos, thread_t, proc_node);
+                            list_remove(&t->proc_node);
+                            if (t->kernel_stack_bottom) {
+                                pmm_free_pages(VIRT_TO_PHYS(t->kernel_stack_bottom), KERNEL_STACK_SIZE / PAGE_SIZE);
+                            }
+                            kfree(t);
+                        }
+
                         vmm_destroy_address_space(p->pagemap);
                         list_remove(&p->proc_list_node);
                         kfree(p);
+
+                        /* Check if any other zombie children remain; if not, clear SIGCHLD */
+                        bool other_zombies = false;
+                        list_node_t *chk;
+                        list_for_each(chk, &g_process_list) {
+                            process_t *other = container_of(chk, process_t, proc_list_node);
+                            if (other->ppid == curr->pid && other->status == PROCESS_ZOMBIE) {
+                                other_zombies = true;
+                                break;
+                            }
+                        }
+                        if (!other_zombies) {
+                            curr->pending_signals &= ~(1U << SIGCHLD);
+                        }
 
                         spinlock_release(&g_process_lock);
                         return found_pid;
@@ -536,9 +636,20 @@ pid_t process_waitpid(pid_t pid, int *status, int options) {
             }
         }
 
+        if (!has_children) {
+            curr->pending_signals &= ~(1U << SIGCHLD);
+            spinlock_release(&g_process_lock);
+            return -10; /* -ECHILD */
+        }
+
+        /* Check for pending unblocked interrupting signals (excluding SIGCHLD) */
+        uint32_t interrupting = curr->pending_signals & ~(curr->blocked_signals | (1U << SIGCHLD));
+        if (interrupting != 0) {
+            spinlock_release(&g_process_lock);
+            return -4; /* -EINTR */
+        }
+
         spinlock_release(&g_process_lock);
-        if (!has_children)
-            return -1;
         if (options & 1) { /* WNOHANG */
             return 0;
         }

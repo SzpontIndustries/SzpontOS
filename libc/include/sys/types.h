@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdbool.h>
 #include <string.h>
+#include <sys/cdefs.h>
 
 typedef int64_t ssize_t;
 typedef int64_t off_t;

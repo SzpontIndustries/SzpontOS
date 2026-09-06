@@ -48,7 +48,7 @@ def create_initramfs(source_dir, output_file):
             tarinfo.gname = "root"
             if tarinfo.isdir():
                 tarinfo.mode = 0o755
-            elif arcname.startswith("bin/"):
+            elif arcname.startswith("bin/") or arcname.startswith("etc/rc") or arcname.startswith("etc/rc.d/"):
                 tarinfo.mode = 0o755
         return tarinfo
 

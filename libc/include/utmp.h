@@ -35,7 +35,7 @@ struct utmp {
     int32_t ut_session;
     struct timeval ut_tv;
     int32_t ut_addr_v6[4];
-    char __unused[20];
+    char ut_unused[20];
 };
 
 #define _PATH_UTMP "/var/run/utmp"

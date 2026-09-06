@@ -171,4 +171,8 @@ extern char **environ;
 
 int64_t syscall(int64_t num, ...);
 
+int eaccess(const char *path, int mode);
+void *setmode(const char *mode_str);
+mode_t getmode(const void *set, mode_t mode);
+
 #endif /* _UNISTD_H */

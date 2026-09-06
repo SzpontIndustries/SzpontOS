@@ -19,3 +19,4 @@ $(TARGET): $(SRCS) $(CRT0_O) $(LIBC_SO) | $(ROOTFS_DIR)
 	@echo "  [LD]  $@"
 	@$(CC) -O2 -ffreestanding -fno-builtin -nostdlib -B$(abspath $(SYSROOT_DIR))/usr/lib $(CRT0_O) $(OBJS) -L$(ROOTFS_DIR)/lib -L$(abspath $(SYSROOT_DIR))/usr/lib -lc -o $@
 	@chmod +x $@
+	@ln -sf init $(ROOTFS_DIR)/bin/telinit

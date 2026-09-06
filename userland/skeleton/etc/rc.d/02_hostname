@@ -1,0 +1,9 @@
+#!/bin/sh
+# /etc/rc.d/02_hostname -- Set system hostname
+
+if [ -f /etc/hostname ]; then
+    read h < /etc/hostname
+    if [ -n "$h" ]; then
+        hostname "$h" 2>/dev/null || true
+    fi
+fi

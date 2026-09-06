@@ -278,6 +278,10 @@ int wcsncmp(const wchar_t *s1, const wchar_t *s2, size_t n) {
     return 0;
 }
 
+int wcscoll(const wchar_t *s1, const wchar_t *s2) {
+    return wcscmp(s1, s2);
+}
+
 wchar_t *wcschr(const wchar_t *s, wchar_t c) {
     while (*s) {
         if (*s == c)

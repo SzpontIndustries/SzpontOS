@@ -6,6 +6,8 @@
 [BITS 64]
 global setjmp
 global longjmp
+global _setjmp
+global _longjmp
 global sigsetjmp
 global siglongjmp
 
@@ -14,6 +16,7 @@ section .text
 ; int setjmp(jmp_buf env)
 ; RDI = env (pointer to 8 x 64-bit uint64_t array)
 setjmp:
+_setjmp:
 sigsetjmp:
     mov [rdi + 0],  rbx
     mov [rdi + 8],  rbp
@@ -31,6 +34,7 @@ sigsetjmp:
 ; void longjmp(jmp_buf env, int val)
 ; RDI = env, RSI = val
 longjmp:
+_longjmp:
 siglongjmp:
     mov eax, esi
     test eax, eax

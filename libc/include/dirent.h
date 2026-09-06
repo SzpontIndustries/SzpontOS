@@ -17,6 +17,7 @@ struct dirent {
     char d_name[128];
     uint32_t d_ino;
     uint32_t d_type;
+    uint16_t d_namlen;
 };
 
 typedef struct {

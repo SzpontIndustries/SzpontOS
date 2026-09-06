@@ -1,0 +1,11 @@
+# /etc/profile - System-wide profile for SzpontOS login shells
+# (C) Copyright by Szpont Industries. All rights reserved.
+
+export PATH=/bin:/usr/bin
+export TERM=xterm-256color
+export ENV=/etc/shrc
+
+# Source interactive shell configuration
+if [ -f /etc/shrc ]; then
+    . /etc/shrc
+fi

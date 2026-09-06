@@ -60,6 +60,7 @@ CORE_PROGS := \
     $(ROOTFS_DIR)/bin/httpget \
     $(ROOTFS_DIR)/bin/shutdown \
     $(ROOTFS_DIR)/bin/poweroff \
+    $(ROOTFS_DIR)/bin/sync \
     $(ROOTFS_DIR)/bin/ls \
     $(ROOTFS_DIR)/bin/lspci \
     $(ROOTFS_DIR)/bin/lsusb \

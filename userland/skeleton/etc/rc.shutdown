@@ -1,0 +1,17 @@
+#!/bin/sh
+# /etc/rc.shutdown -- SzpontOS System Shutdown Script
+# (C) Copyright by Szpont Industries. Inspired by FreeBSD /etc/rc.shutdown.
+
+echo ""
+echo "\033[1;33m[SHUTDOWN] Running /etc/rc.shutdown...\033[0m"
+
+# Terminate background services
+echo "[SHUTDOWN] Stopping background services..."
+killall httpd 2>/dev/null
+
+# Flush disk caches
+echo "[SHUTDOWN] Syncing filesystems..."
+sync
+
+echo "\033[1;32m[SHUTDOWN] /etc/rc.shutdown completed cleanly.\033[0m"
+exit 0

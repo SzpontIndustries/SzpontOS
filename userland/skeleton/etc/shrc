@@ -1,0 +1,60 @@
+# /etc/shrc - System-wide configuration for interactive shells (shrc / bashrc equivalent)
+# (C) Copyright by Szpont Industries. All rights reserved.
+
+# Sensible colored prompt: root@szpontos:/# or user@szpontos:~$
+if [ "$EUID" = "0" ] || [ "$UID" = "0" ]; then
+    export PS1='\e[1;31m\u\e[0m@\e[1;32m\h\e[0m:\e[1;34m\w\e[0m# '
+else
+    export PS1='\e[1;36m\u\e[0m@\e[1;32m\h\e[0m:\e[1;34m\w\e[0m$ '
+fi
+
+# Environment defaults
+export EDITOR=nano
+export PAGER=cat
+
+# Convenient aliases
+alias ll='ls -la'
+alias l='ls -l'
+alias la='ls -A'
+alias cls='clear'
+alias md='mkdir -p'
+alias rd='rm -rf'
+alias ..='cd ..'
+alias ...='cd ../..'
+
+# Built-in help command
+help() {
+    cat << 'EOF'
+SzpontOS Shell (sh) - Commands & Guide:
+  help            - Display this help message
+  echo [args...]  - Print text to standard output
+  pwd             - Print current working directory
+  cd <path>       - Change current working directory
+  exit [code]     - Exit the shell
+
+External Commands (/bin/):
+  ls, cat, head, tail, wc, grep, find - Files & text
+  uname, hostname, uptime, date, ps, top - System info
+  df, free, mount, dmesg, sysctl      - Diagnostics
+  mkdir, touch, rm, chmod, sync       - File management
+  id, whoami, su                      - Users & groups
+  kill, killall, sleep, clear         - Process control
+  ping, ifconfig, nc, httpd, curl     - Networking
+  nano, fastfetch, file, zsh, openssl - Applications
+  reboot, shutdown, poweroff          - Power management
+
+Keyboard Shortcuts & Line Editing:
+  Up/Down Arrows  - Command history navigation
+  Left/Right      - Move cursor left / right
+  Home / End      - Jump to beginning / end of line
+  Tab             - Auto-complete commands and file paths
+  Ctrl+C          - Cancel current line
+  Ctrl+D          - Exit shell on empty line / Delete char under cursor
+  Ctrl+L          - Clear screen and redraw prompt
+  Ctrl+U          - Clear entire input line
+  Ctrl+K          - Kill from cursor to end of line
+  Ctrl+A / Ctrl+E - Jump to beginning / end of line
+  Delete          - Delete character under cursor
+  Backspace       - Delete character before cursor
+EOF
+}

@@ -1,0 +1,15 @@
+# /etc/ttys -- SzpontOS Terminal & Session Configuration
+# (C) Copyright by Szpont Industries. Inspired by 4.4BSD / FreeBSD ttys(5).
+#
+# Format:
+#   name      program              type             status          comments
+#
+# Status options:
+#   on          - session is always started and supervised (restarted on exit)
+#   off         - session is disabled
+#   onifexists  - session is started if the device file exists in /dev
+#   secure      - allows root login on this terminal
+#
+# name       getty                 type             status          comments
+console      "/bin/sh"             xterm-256color   on secure       # Framebuffer & Primary Console
+serial       "/bin/sh"             vt100            off secure      # COM1 Serial (off by default to avoid contention with console)

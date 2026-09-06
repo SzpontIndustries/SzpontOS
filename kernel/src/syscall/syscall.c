@@ -12,6 +12,7 @@
 #include <fs/vfs.h>
 #include <fs/bcache.h>
 #include <fs/elf.h>
+#include <fs/pipe.h>
 #include <drivers/serial.h>
 #include <drivers/framebuffer.h>
 #include <drivers/keyboard.h>
@@ -241,11 +242,6 @@ static int64_t sys_open(const char *path, int flags, mode_t mode) {
     if (!proc || !path)
         return -22; /* EINVAL */
 
-    /* Ensure standard file descriptors 0, 1, 2 exist before allocating new ones */
-    ensure_std_fd(proc, 0);
-    ensure_std_fd(proc, 1);
-    ensure_std_fd(proc, 2);
-
     char full_path[256];
     if (vfs_resolve_path(path, full_path, sizeof(full_path)) != 0)
         return -2; /* ENOENT */
@@ -361,17 +357,6 @@ static int64_t sys_open(const char *path, int flags, mode_t mode) {
     proc->fd_cloexec[fd] = (flags & 0x80000) ? true : false; /* O_CLOEXEC */
     return fd;
 }
-
-#define PIPE_BUF_SIZE 4096
-
-typedef struct pipe_chan {
-    char data[PIPE_BUF_SIZE];
-    size_t head;
-    size_t tail;
-    size_t count;
-    int readers;
-    int writers;
-} pipe_chan_t;
 
 static ssize_t pipe_read_op(vfs_node_t *node, off_t offset, size_t size, void *buffer) {
     (void)offset;

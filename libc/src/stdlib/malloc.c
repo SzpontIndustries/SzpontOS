@@ -311,6 +311,14 @@ double atof(const char *nptr) {
     return strtod(nptr, NULL);
 }
 
+float strtof(const char *nptr, char **endptr) {
+    return (float)strtod(nptr, endptr);
+}
+
+long double strtold(const char *nptr, char **endptr) {
+    return (long double)strtod(nptr, endptr);
+}
+
 #define MAX_ENV 64
 static char *g_env_keys[MAX_ENV];
 static char *g_env_vals[MAX_ENV];

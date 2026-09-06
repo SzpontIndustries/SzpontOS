@@ -16,6 +16,7 @@
 #define O_NOFOLLOW 0x20000
 #define O_CLOEXEC 0x80000
 #define O_PATH 010000000
+#define O_VERIFY 0x0000
 
 #define AT_FDCWD (-100)
 #define AT_SYMLINK_NOFOLLOW 0x100

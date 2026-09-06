@@ -47,6 +47,7 @@ struct dirent *readdir(DIR *dirp) {
     if (bytes <= 0) {
         return NULL;
     }
+    dirp->current.d_namlen = (uint16_t)strlen(dirp->current.d_name);
     return &dirp->current;
 }
 

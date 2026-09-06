@@ -9,6 +9,8 @@ LIBC_C_SRCS := \
     $(ROOT_DIR)/libc/src/stdlib/locale.c \
     $(ROOT_DIR)/libc/src/stdlib/system.c \
     $(ROOT_DIR)/libc/src/stdio/printf.c \
+    $(ROOT_DIR)/libc/src/stdio/err.c \
+    $(ROOT_DIR)/libc/src/signal/siglist.c \
     $(ROOT_DIR)/libc/src/unistd/unistd.c \
     $(ROOT_DIR)/libc/src/unistd/getrandom.c \
     $(ROOT_DIR)/libc/src/unistd/sysconf.c \

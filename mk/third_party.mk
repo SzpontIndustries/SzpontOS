@@ -800,7 +800,7 @@ OPENSSL_APP_OBJS = \
 OPENSSL_STAMP := $(OPENSSL_BUILD_DIR)/.built
 
 $(OPENSSL_STAMP): $(OPENSSL_BUILD_DIR)/Makefile $(LIBC_SO) $(LIBM_SO) $(CRT0_O) $(LIBC_A) | $(ROOTFS_DIR)
-	@mkdir -p $(OPENSSL_BUILD_DIR) $(ROOTFS_DIR)/lib $(ROOTFS_DIR)/bin $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/openssl $(SYSROOT_DIR)/usr/lib/pkgconfig $(SYSROOT_DIR)/usr/share/pkgconfig
+	@mkdir -p $(OPENSSL_BUILD_DIR) $(OPENSSL_BUILD_DIR)/ssl $(OPENSSL_BUILD_DIR)/crypto $(OPENSSL_BUILD_DIR)/apps $(OPENSSL_BUILD_DIR)/providers $(ROOTFS_DIR)/lib $(ROOTFS_DIR)/bin $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/openssl $(SYSROOT_DIR)/usr/lib/pkgconfig $(SYSROOT_DIR)/usr/share/pkgconfig
 	@echo "  [MAKE-OPENSSL] Kompilacja OpenSSL (libcrypto, libssl, CLI)..."
 	@$(MAKE) -C $(OPENSSL_BUILD_DIR) build_sw
 	@$(LD) -shared -soname libcrypto.so.4 -o $(OPENSSL_BUILD_DIR)/libcrypto.so.4 --whole-archive $(OPENSSL_BUILD_DIR)/libcrypto.a --no-whole-archive -L$(abspath $(SYSROOT_DIR))/usr/lib -lc -lm

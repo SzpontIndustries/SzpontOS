@@ -51,8 +51,13 @@ int main(int argc, char *argv[]) {
         }
 
         if (ret != 0) {
-            printf("mkdir: cannot create directory '%s'\n", argv[i]);
-            status = 1;
+            struct stat st;
+            if (parents && stat(argv[i], &st) == 0 && S_ISDIR(st.st_mode)) {
+                /* Directory already exists; -p ignores it */
+            } else {
+                printf("mkdir: cannot create directory '%s'\n", argv[i]);
+                status = 1;
+            }
         }
     }
 

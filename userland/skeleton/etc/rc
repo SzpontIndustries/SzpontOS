@@ -1,0 +1,7 @@
+#!/bin/sh
+# /etc/rc -- SzpontOS System Startup Script
+# (C) Copyright by Szpont Industries. Inspired by FreeBSD /etc/rc.
+
+export PATH=/bin:/usr/bin
+export HOME=/root
+export TERM=xterm-256color

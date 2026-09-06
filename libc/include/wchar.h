@@ -56,6 +56,7 @@ wchar_t *wcscat(wchar_t *dest, const wchar_t *src);
 wchar_t *wcsncat(wchar_t *dest, const wchar_t *src, size_t n);
 int wcscmp(const wchar_t *s1, const wchar_t *s2);
 int wcsncmp(const wchar_t *s1, const wchar_t *s2, size_t n);
+int wcscoll(const wchar_t *s1, const wchar_t *s2);
 wchar_t *wcschr(const wchar_t *s, wchar_t c);
 wchar_t *wcsrchr(const wchar_t *s, wchar_t c);
 wchar_t *wcspbrk(const wchar_t *s, const wchar_t *accept);

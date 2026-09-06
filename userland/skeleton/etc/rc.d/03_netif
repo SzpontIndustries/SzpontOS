@@ -1,0 +1,6 @@
+#!/bin/sh
+# /etc/rc.d/03_netif -- Initialize network interfaces
+
+echo "Configuring network interfaces..."
+ifconfig lo 127.0.0.1 up 2>/dev/null || true
+ifconfig eth0 10.0.2.15 up 2>/dev/null || true
