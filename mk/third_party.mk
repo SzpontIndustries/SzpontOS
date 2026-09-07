@@ -213,7 +213,7 @@ $(FASTFETCH_BUILD_DIR)/Makefile: third_party/fastfetch/CMakeLists.txt | $(SYSROO
 	    -DCMAKE_SYSTEM_NAME=Linux \
 	    -DCMAKE_TRY_COMPILE_TARGET_TYPE=STATIC_LIBRARY \
 	    -DCMAKE_C_COMPILER="$(shell which -a $(CC) 2>/dev/null | grep -v '\.bear' | head -n 1 || which $(CC) 2>/dev/null || echo $(CC))" \
-	    -DCMAKE_C_FLAGS="--sysroot=$(abspath $(SYSROOT_DIR)) -isystem $(abspath $(SYSROOT_DIR))/usr/include $(LINUX_COMPAT_CFLAGS) -D__linux__=1 -ffreestanding -fno-builtin -O2" \
+	    -DCMAKE_C_FLAGS="--sysroot=$(abspath $(SYSROOT_DIR)) -isystem $(abspath $(SYSROOT_DIR))/usr/include -D__linux__=1 -ffreestanding -fno-builtin -O2" \
 	    -DCMAKE_EXE_LINKER_FLAGS="-nostdlib -L$(abspath $(SYSROOT_DIR))/usr/lib -B$(abspath $(SYSROOT_DIR))/usr/lib $(abspath $(SYSROOT_DIR))/usr/lib/crt0.o" \
 	    -DCMAKE_C_STANDARD_LIBRARIES="-Wl,--start-group $(abspath $(SYSROOT_DIR))/usr/lib/libc.a $(abspath $(SYSROOT_DIR))/usr/lib/libm.a $(abspath $(SYSROOT_DIR))/usr/lib/libdl.a -Wl,--end-group" \
 	    -DBINARY_LINK_TYPE=static \
@@ -539,18 +539,8 @@ $(ROOTFS_DIR)/lib/libpixman-1.so: $(LIBM_SO) $(wildcard third_party/pixman/pixma
 	    cp -f $(abspath third_party/pixman/pixman)/*.h $(abspath $(SYSROOT_DIR))/usr/include/pixman-1/ 2>/dev/null || true && \
 	    cp -f $(abspath third_party/pixman/pixman)/*.h $(abspath $(SYSROOT_DIR))/usr/include/ 2>/dev/null || true
 
-# ==============================================================================
-# libdrm Target
-# ==============================================================================
-$(ROOTFS_DIR)/lib/libdrm.so: $(BUILD_DIR)/libc/src/drm/drm.o | $(SYSROOT_STAMP) $(ROOTFS_DIR)
-	@mkdir -p $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/lib/pkgconfig $(SYSROOT_DIR)/usr/include/libdrm
-	@echo "  [LD-LIBDRM] $@"
-	@$(LD) -shared -soname libdrm.so.2 -o $(SYSROOT_DIR)/usr/lib/libdrm.so $(BUILD_DIR)/libc/src/drm/drm.o -L$(abspath $(SYSROOT_DIR))/usr/lib -lc
-	@cp -f $(SYSROOT_DIR)/usr/lib/libdrm.so $@
-	@cp -f $(SYSROOT_DIR)/usr/lib/libdrm.so $(ROOTFS_DIR)/lib/libdrm.so.2
-	@printf "prefix=/usr\nexec_prefix=\$${prefix}\nlibdir=\$${exec_prefix}/lib\nincludedir=\$${prefix}/include\n\nName: libdrm\nDescription: Userspace interface to kernel DRM services\nVersion: 2.4.110\nLibs: -L\$${libdir} -ldrm\nCflags: -I\$${includedir} -I\$${includedir}/libdrm\n" > $(SYSROOT_DIR)/usr/lib/pkgconfig/libdrm.pc
-	@cp -f compat/linux/include/drm/*.h $(SYSROOT_DIR)/usr/include/ 2>/dev/null || true
-	@cp -f compat/linux/include/drm/*.h $(SYSROOT_DIR)/usr/include/libdrm/ 2>/dev/null || true
+$(ROOTFS_DIR)/lib/libdrm.so: | $(SYSROOT_STAMP) $(ROOTFS_DIR)
+	@$(MAKE) -C $(ROOT_DIR)/libdrm install
 
 # ==============================================================================
 # libICE Target

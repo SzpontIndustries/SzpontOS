@@ -133,5 +133,22 @@ $(ROOTFS_DIR)/bin/curltest: $(ROOT_DIR)/userland/bin/curltest.c $(CRT0_O) $(LIBC
 	@$(CC) -O2 -ffreestanding -fno-builtin -nostdlib -B$(abspath $(SYSROOT_DIR))/usr/lib $(CRT0_O) $(BUILD_DIR)/userland/bin/curltest.o $(ROOTFS_DIR)/lib/libcurl.so.4 $(ROOTFS_DIR)/lib/libssl.so.4 $(ROOTFS_DIR)/lib/libcrypto.so.4 $(ROOTFS_DIR)/lib/libc.so $(ROOTFS_DIR)/lib/libm.so -o $@
 	@chmod +x $@
 
+# Native DRM test utilities linked against libdrm.so
+$(ROOTFS_DIR)/bin/drmtest: $(ROOT_DIR)/userland/bin/drmtest.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) $(ROOTFS_DIR)/lib/libdrm.so | $(SYSROOT_STAMP) $(ROOTFS_DIR)
+	@mkdir -p $(ROOTFS_DIR)/bin $(BUILD_DIR)/userland/bin
+	@echo "  [CC]  $<"
+	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/drmtest.d -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include/libdrm -c $< -o $(BUILD_DIR)/userland/bin/drmtest.o
+	@echo "  [LD]  $@"
+	@$(CC) -O2 -ffreestanding -fno-builtin -nostdlib -B$(abspath $(SYSROOT_DIR))/usr/lib $(CRT0_O) $(BUILD_DIR)/userland/bin/drmtest.o -L$(ROOTFS_DIR)/lib -L$(abspath $(SYSROOT_DIR))/usr/lib -ldrm -lm -lc -o $@
+	@chmod +x $@
+
+$(ROOTFS_DIR)/bin/mesadrmtest: $(ROOT_DIR)/userland/bin/mesadrmtest.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) $(ROOTFS_DIR)/lib/libdrm.so | $(SYSROOT_STAMP) $(ROOTFS_DIR)
+	@mkdir -p $(ROOTFS_DIR)/bin $(BUILD_DIR)/userland/bin
+	@echo "  [CC]  $<"
+	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/mesadrmtest.d -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include/libdrm -c $< -o $(BUILD_DIR)/userland/bin/mesadrmtest.o
+	@echo "  [LD]  $@"
+	@$(CC) -O2 -ffreestanding -fno-builtin -nostdlib -B$(abspath $(SYSROOT_DIR))/usr/lib $(CRT0_O) $(BUILD_DIR)/userland/bin/mesadrmtest.o -L$(ROOTFS_DIR)/lib -L$(abspath $(SYSROOT_DIR))/usr/lib -ldrm -lm -lc -o $@
+	@chmod +x $@
+
 -include $(wildcard $(BUILD_DIR)/userland/bin/*.d)
 

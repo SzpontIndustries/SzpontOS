@@ -73,9 +73,9 @@ SzpontOS/
 │   ├── zsh/                     # Z shell (/bin/zsh)
 │   └── fastfetch/               # System information tool (/bin/fastfetch)
 │
-├── compat/                      # System Compatibility Subsystems (FreeBSD-inspired)
-│   └── linux/                   # Linux UAPI & DRM Compatibility Layer
-│       └── include/             # Isolated Linux headers (linux/*, drm/*, netpacket/*)
+├── libdrm/                      # Native Direct Rendering Manager Library (builds libdrm.so.2)
+│   ├── include/                 # xf86drm.h, xf86drmMode.h, drm/*
+│   └── src/                     # xf86drm.c, xf86drmMode.c, syncobj.c
 │
 ├── userland/                    # User space programs and root filesystem
 │   ├── init/main.c              # PID 1 init process (spawns /bin/sh)

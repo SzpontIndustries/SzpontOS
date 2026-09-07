@@ -14,9 +14,8 @@ all: xserver
 xserver: $(TARGET)
 
 $(BUILD_DIR)/userland/xserver/%.o: $(ROOT_DIR)/userland/xserver/src/%.c $(HDRS) | $(BUILD_DIR)/userland/xserver
-	@mkdir -p $(BUILD_DIR)/userland/xserver
 	@echo "  [CC-SZPONTX11] $<"
-	@$(CC) $(USER_CFLAGS) -I$(ROOT_DIR)/userland/xserver/include -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include/libdrm -I$(ROOT_DIR)/compat/linux/include -c $< -o $@
+	@$(CC) $(USER_CFLAGS) -I$(ROOT_DIR)/userland/xserver/include -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include/libdrm -c $< -o $@
 
 $(BUILD_DIR)/userland/xserver:
 	@mkdir -p $@

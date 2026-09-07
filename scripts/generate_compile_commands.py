@@ -31,8 +31,7 @@ def main():
     # Common flags
     base_user_includes = [
         "-isystem", os.path.join(ROOT_DIR, "libc/include"),
-        "-isystem", os.path.join(ROOT_DIR, "build/sysroot/usr/include"),
-        "-I", os.path.join(ROOT_DIR, "compat/linux/include")
+        "-isystem", os.path.join(ROOT_DIR, "build/sysroot/usr/include")
     ]
 
     # Walk through repository directories

@@ -96,10 +96,14 @@ typedef struct _drmModePropertyBlob {
     void *data;
 } drmModePropertyBlobRes, *drmModePropertyBlobPtr;
 
+#ifndef DRM_PROP_NAME_LEN
+#define DRM_PROP_NAME_LEN 32
+#endif
+
 typedef struct _drmModeProperty {
     uint32_t prop_id;
     uint32_t flags;
-    char name[32];
+    char name[DRM_PROP_NAME_LEN];
     int count_values;
     uint64_t *values;
     int count_enums;

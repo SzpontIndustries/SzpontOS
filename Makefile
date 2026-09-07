@@ -10,7 +10,7 @@ include $(ROOT_DIR)/mk/qemu.mk
 # ==============================================================================
 # Phony Targets
 # ==============================================================================
-.PHONY: all build toolchain-info kernel libc userland modules sysroot \
+.PHONY: all build toolchain-info kernel libc libdrm userland modules sysroot \
         third-party clean distclean compile_commands.json compile-commands bear
 
 # Default target: build bootable ISO image
@@ -26,7 +26,7 @@ toolchain-info:
 	@echo "  [TOOLCHAIN] CORES: $(NPROC) (Parallel Jobs: $(JOBS))"
 
 # Build all core components
-build: toolchain-info libc sysroot userland modules third-party kernel
+build: toolchain-info libc sysroot libdrm userland modules third-party kernel
 
 KERNEL_SRCS := $(shell find $(ROOT_DIR)/kernel/src $(ROOT_DIR)/kernel/include $(ROOT_DIR)/kernel/arch -type f 2>/dev/null)
 LIBC_SRCS   := $(shell find $(ROOT_DIR)/libc/src $(ROOT_DIR)/libc/include -type f 2>/dev/null)
@@ -44,6 +44,9 @@ $(SYSROOT_STAMP): $(LIBC_SRCS)
 	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/libc sysroot
 
 sysroot: $(SYSROOT_STAMP)
+
+libdrm: sysroot
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/libdrm
 
 modules:
 	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/modules

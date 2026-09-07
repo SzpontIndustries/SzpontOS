@@ -206,9 +206,6 @@ USER_PROGS := \
     $(ROOTFS_DIR)/bin/openssl \
     $(ROOTFS_DIR)/bin/curl
 
-# Linux Compatibility Layer
-LINUX_COMPAT_DIR    := $(ROOT_DIR)/compat/linux
-LINUX_COMPAT_CFLAGS := -isystem $(LINUX_COMPAT_DIR)/include
 
 # ==============================================================================
 # Compilation Flags

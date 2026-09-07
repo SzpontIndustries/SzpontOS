@@ -49,7 +49,6 @@ LIBC_C_SRCS := \
     $(ROOT_DIR)/libc/src/net/if.c \
     $(ROOT_DIR)/libc/src/utmp/utmp.c \
     $(ROOT_DIR)/libc/src/sched/sched.c \
-    $(ROOT_DIR)/libc/src/drm/drm.c \
     $(ROOT_DIR)/libc/src/pty/pty.c \
     $(ROOT_DIR)/libc/src/shm/shm.c \
     $(ROOT_DIR)/libc/src/arch/x86_64/builtins.c
@@ -124,9 +123,6 @@ $(SYSROOT_STAMP): $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(LIBC_SO) $(LIBM_SO)
 	@cp -R $(ROOT_DIR)/libc/include/. $(SYSROOT_DIR)/usr/include/
 	@cp -f $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(SYSROOT_DIR)/usr/lib/ 2>/dev/null || true
 	@cp -f $(LIBC_SO) $(LIBM_SO) $(SYSROOT_DIR)/usr/lib/ 2>/dev/null || true
-	@cp -f $(ROOT_DIR)/compat/linux/include/drm/*.h $(SYSROOT_DIR)/usr/include/ 2>/dev/null || true
-	@cp -f $(ROOT_DIR)/compat/linux/include/drm/*.h $(SYSROOT_DIR)/usr/include/libdrm/ 2>/dev/null || true
-	@cp -f $(ROOT_DIR)/compat/linux/include/drm/*.h $(SYSROOT_DIR)/usr/include/drm/ 2>/dev/null || true
 	@cp -R $(ROOT_DIR)/third_party/xorgproto/include/. $(SYSROOT_DIR)/usr/include/ 2>/dev/null || true
 	@if [ -f $(ROOT_DIR)/third_party/xorgproto/include/X11/Xpoll.h.in ]; then \
 	    sed -e 's|@USE_FDS_BITS@|fds_bits|g' $(ROOT_DIR)/third_party/xorgproto/include/X11/Xpoll.h.in > $(SYSROOT_DIR)/usr/include/X11/Xpoll.h; \

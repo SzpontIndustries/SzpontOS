@@ -16,8 +16,7 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <sys/time.h>
-#include <xf86drm.h>
-#include <xf86drmMode.h>
+#include <sys/ioctl.h>
 
 static char g_dlerror_buf[256] = {0};
 static int g_has_dlerror = 0;
@@ -196,66 +195,6 @@ static const builtin_sym_t g_builtin_syms[] = {
     {"strstr", (void *)strstr},
     {"strtok", (void *)strtok},
     {"strerror", (void *)strerror},
-
-    /* DRM / KMS Subsystem */
-    {"drmOpen", (void *)drmOpen},
-    {"drmClose", (void *)drmClose},
-    {"drmGetVersion", (void *)drmGetVersion},
-    {"drmFreeVersion", (void *)drmFreeVersion},
-    {"drmSetMaster", (void *)drmSetMaster},
-    {"drmDropMaster", (void *)drmDropMaster},
-    {"drmSetClientCap", (void *)drmSetClientCap},
-    {"drmSetInterfaceVersion", (void *)drmSetInterfaceVersion},
-    {"drmHandleEvent", (void *)drmHandleEvent},
-    {"drmWaitVBlank", (void *)drmWaitVBlank},
-    {"drmPrimeFDToHandle", (void *)drmPrimeFDToHandle},
-    {"drmPrimeHandleToFD", (void *)drmPrimeHandleToFD},
-    {"drmModeGetResources", (void *)drmModeGetResources},
-    {"drmModeFreeResources", (void *)drmModeFreeResources},
-    {"drmModeGetConnector", (void *)drmModeGetConnector},
-    {"drmModeFreeConnector", (void *)drmModeFreeConnector},
-    {"drmModeGetEncoder", (void *)drmModeGetEncoder},
-    {"drmModeFreeEncoder", (void *)drmModeFreeEncoder},
-    {"drmModeGetCrtc", (void *)drmModeGetCrtc},
-    {"drmModeFreeCrtc", (void *)drmModeFreeCrtc},
-    {"drmModeSetCrtc", (void *)drmModeSetCrtc},
-    {"drmModeGetFB", (void *)drmModeGetFB},
-    {"drmModeFreeFB", (void *)drmModeFreeFB},
-    {"drmModeAddFB", (void *)drmModeAddFB},
-    {"drmModeAddFB2", (void *)drmModeAddFB2},
-    {"drmModeRmFB", (void *)drmModeRmFB},
-    {"drmModeGetProperty", (void *)drmModeGetProperty},
-    {"drmModeFreeProperty", (void *)drmModeFreeProperty},
-    {"drmModeGetPropertyBlob", (void *)drmModeGetPropertyBlob},
-    {"drmModeFreePropertyBlob", (void *)drmModeFreePropertyBlob},
-    {"drmModeCreatePropertyBlob", (void *)drmModeCreatePropertyBlob},
-    {"drmModeDestroyPropertyBlob", (void *)drmModeDestroyPropertyBlob},
-    {"drmModeGetPlaneResources", (void *)drmModeGetPlaneResources},
-    {"drmModeFreePlaneResources", (void *)drmModeFreePlaneResources},
-    {"drmModeGetPlane", (void *)drmModeGetPlane},
-    {"drmModeFreePlane", (void *)drmModeFreePlane},
-    {"drmModeObjectGetProperties", (void *)drmModeObjectGetProperties},
-    {"drmModeFreeObjectProperties", (void *)drmModeFreeObjectProperties},
-    {"drmModeObjectSetProperty", (void *)drmModeObjectSetProperty},
-    {"drmModeSetCursor", (void *)drmModeSetCursor},
-    {"drmModeSetCursor2", (void *)drmModeSetCursor2},
-    {"drmModeMoveCursor", (void *)drmModeMoveCursor},
-    {"drmModeCrtcSetGamma", (void *)drmModeCrtcSetGamma},
-    {"drmModeConnectorSetProperty", (void *)drmModeConnectorSetProperty},
-    {"drmGetCap", (void *)drmGetCap},
-    {"drmGetBusid", (void *)drmGetBusid},
-    {"drmFreeBusid", (void *)drmFreeBusid},
-    {"drmIoctl", (void *)drmIoctl},
-    {"drmModeCreateDumb", (void *)drmModeCreateDumb},
-    {"drmModeMapDumb", (void *)drmModeMapDumb},
-    {"drmModeDestroyDumb", (void *)drmModeDestroyDumb},
-    {"drmModeDirtyFB", (void *)drmModeDirtyFB},
-    {"drmModeAtomicAlloc", (void *)drmModeAtomicAlloc},
-    {"drmModeAtomicFree", (void *)drmModeAtomicFree},
-    {"drmModeAtomicAddProperty", (void *)drmModeAtomicAddProperty},
-    {"drmModeAtomicCommit", (void *)drmModeAtomicCommit},
-    {"drmModeCreateLease", (void *)drmModeCreateLease},
-    {"drmModeRevokeLease", (void *)drmModeRevokeLease},
 
     /* Dynamic loading */
     {"dlopen", (void *)dlopen},
