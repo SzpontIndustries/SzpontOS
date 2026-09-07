@@ -108,6 +108,8 @@ process_t *process_create(const char *name) {
     strcpy(proc->cwd, "/");
     proc->umask = 0022;
     proc->alarm_ticks = 0;
+    proc->cpu_time_ns = 0;
+    wait_queue_init(&proc->wait_child);
 
     proc->pending_signals = 0;
     proc->blocked_signals = 0;
@@ -301,12 +303,14 @@ void process_exit(int exit_code) {
         process_t *parent = process_get_by_pid(proc->ppid);
         if (parent) {
             process_send_signal(parent, SIGCHLD);
+            wait_queue_wake_all(&parent->wait_child);
         }
     }
     if (notify_init && proc->ppid != 1) {
         process_t *init_proc = process_get_by_pid(1);
         if (init_proc) {
             process_send_signal(init_proc, SIGCHLD);
+            wait_queue_wake_all(&init_proc->wait_child);
         }
     }
 
@@ -381,12 +385,14 @@ int process_send_signal(process_t *proc, int sig) {
                 process_t *parent = process_get_by_pid(ppid);
                 if (parent) {
                     process_send_signal(parent, SIGCHLD);
+                    wait_queue_wake_all(&parent->wait_child);
                 }
             }
             if (notify_init && ppid != 1) {
                 process_t *init_proc = process_get_by_pid(1);
                 if (init_proc) {
                     process_send_signal(init_proc, SIGCHLD);
+                    wait_queue_wake_all(&init_proc->wait_child);
                 }
             }
 
@@ -397,6 +403,7 @@ int process_send_signal(process_t *proc, int sig) {
         }
     }
 
+    wait_queue_wake_all(&proc->wait_child);
     spinlock_release(&g_process_lock);
     return 0;
 }
@@ -727,7 +734,8 @@ pid_t process_waitpid(pid_t pid, int *status, int options) {
             return 0;
         }
 
-        thread_sleep(10);
+        /* Event-driven blocking wait: deschedules until a child changes state */
+        wait_queue_wait(&curr->wait_child);
     }
 }
 

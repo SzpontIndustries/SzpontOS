@@ -144,6 +144,36 @@ uintptr_t vmm_virt_to_phys(pagemap_t *map, uintptr_t virt) {
     return (entry & PHYS_ADDR_MASK) | (virt & 0xFFF);
 }
 
+uintptr_t vmm_user_page_phys(pagemap_t *map, uintptr_t virt, bool write) {
+    if (!map || !map->pml4_virt)
+        return 0;
+
+    if (virt >= 0x0000800000000000ULL)
+        return 0;
+
+    page_table_t *pml4 = map->pml4_virt;
+    page_table_t *pdpt = get_next_level(pml4, pml4_index(virt), false, 0);
+    if (!pdpt)
+        return 0;
+
+    page_table_t *pd = get_next_level(pdpt, pdpt_index(virt), false, 0);
+    if (!pd)
+        return 0;
+
+    page_table_t *pt = get_next_level(pd, pd_index(virt), false, 0);
+    if (!pt)
+        return 0;
+
+    uint64_t entry = pt->entries[pt_index(virt)];
+    if (!(entry & VMM_FLAG_PRESENT) || !(entry & VMM_FLAG_USER))
+        return 0;
+
+    if (write && !(entry & VMM_FLAG_WRITABLE))
+        return 0;
+
+    return (entry & PHYS_ADDR_MASK) | (virt & 0xFFF);
+}
+
 pagemap_t *vmm_get_kernel_pagemap(void) {
     return &g_kernel_pagemap;
 }

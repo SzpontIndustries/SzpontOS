@@ -9,6 +9,7 @@
 #include <mm/heap.h>
 #include <mm/vmm.h>
 #include <mm/shm.h>
+#include <mm/usercopy.h>
 #include <fs/vfs.h>
 #include <fs/bcache.h>
 #include <fs/elf.h>
@@ -122,6 +123,42 @@ struct utsname {
     char machine[65];
 };
 
+/*
+ * Usercopy helpers for syscall layer:
+ * Validates userspace pointers page-by-page through HHDM and returns EFAULT (-14)
+ * on invalid addresses, while safely permitting kernel-space buffers (> USER_ADDR_MAX).
+ */
+static inline bool put_user_buffer(void *dst, const void *src, size_t len) {
+    if (!dst || len == 0)
+        return true;
+    if ((uintptr_t)dst > USER_ADDR_MAX) {
+        memcpy(dst, src, len);
+        return true;
+    }
+    return copy_to_user((uintptr_t)dst, src, len);
+}
+
+static inline bool get_user_buffer(void *dst, const void *src, size_t len) {
+    if (!src || len == 0)
+        return true;
+    if ((uintptr_t)src > USER_ADDR_MAX) {
+        memcpy(dst, src, len);
+        return true;
+    }
+    return copy_from_user(dst, (uintptr_t)src, len);
+}
+
+static inline bool get_user_string(char *dst, const char *src, size_t max_len) {
+    if (!src || !dst || max_len == 0)
+        return false;
+    if ((uintptr_t)src > USER_ADDR_MAX) {
+        strncpy(dst, src, max_len - 1);
+        dst[max_len - 1] = '\0';
+        return true;
+    }
+    return copy_string_from_user(dst, (uintptr_t)src, max_len) >= 0;
+}
+
 static int64_t sys_read(int fd, void *buf, size_t count) {
     if (!buf || count == 0)
         return 0;
@@ -129,6 +166,10 @@ static int64_t sys_read(int fd, void *buf, size_t count) {
     process_t *proc = sched_get_current_process();
     if (!proc || fd < 0 || fd >= MAX_FD)
         return -1;
+
+    /* Validate user write buffer if in userspace */
+    if ((uintptr_t)buf <= USER_ADDR_MAX && !verify_user_write((uintptr_t)buf, count))
+        return -14; /* -EFAULT */
 
     if (!proc->fds[fd] || !proc->fds[fd]->node) {
         if (fd == 0) {
@@ -196,6 +237,10 @@ static int64_t sys_write(int fd, const void *buf, size_t count) {
     if (!proc || fd < 0 || fd >= MAX_FD)
         return -1;
 
+    /* Validate user read buffer if in userspace */
+    if ((uintptr_t)buf <= USER_ADDR_MAX && !verify_user_read((uintptr_t)buf, count))
+        return -14; /* -EFAULT */
+
     if (!proc->fds[fd] || !proc->fds[fd]->node) {
         if (fd == 1 || fd == 2) {
             fb_console_write((const char *)buf, count);
@@ -242,8 +287,12 @@ static int64_t sys_open(const char *path, int flags, mode_t mode) {
     if (!proc || !path)
         return -22; /* EINVAL */
 
+    char kpath[256];
+    if (!get_user_string(kpath, path, sizeof(kpath)))
+        return -14; /* -EFAULT */
+
     char full_path[256];
-    if (vfs_resolve_path(path, full_path, sizeof(full_path)) != 0)
+    if (vfs_resolve_path(kpath, full_path, sizeof(full_path)) != 0)
         return -2; /* ENOENT */
 
     /* Special handling for /dev/tty (process controlling terminal) */
@@ -541,8 +590,17 @@ static int64_t sys_pipe(int *pipefd) {
     proc->fds[fd0] = f0;
     proc->fds[fd1] = f1;
 
-    pipefd[0] = fd0;
-    pipefd[1] = fd1;
+    int kfds[2] = {fd0, fd1};
+    if (!put_user_buffer(pipefd, kfds, sizeof(kfds))) {
+        proc->fds[fd0] = NULL;
+        proc->fds[fd1] = NULL;
+        kfree(f0);
+        kfree(f1);
+        kfree(rnode);
+        kfree(wnode);
+        kfree(p);
+        return -14; /* -EFAULT */
+    }
     return 0;
 }
 
@@ -712,16 +770,21 @@ static int64_t sys_stat(const char *path, struct stat *buf) {
     if (!path || !buf)
         return -22;
 
+    char kpath[256];
+    if (!get_user_string(kpath, path, sizeof(kpath)))
+        return -14; /* -EFAULT */
+
     char full_path[256];
-    if (vfs_resolve_path(path, full_path, sizeof(full_path)) != 0)
+    if (vfs_resolve_path(kpath, full_path, sizeof(full_path)) != 0)
         return -2;
 
     vfs_node_t *node = vfs_lookup(full_path);
     if (!node)
         return -2;
 
-    memset(buf, 0, sizeof(struct stat));
-    buf->st_ino = node->inode;
+    struct stat kbuf;
+    memset(&kbuf, 0, sizeof(struct stat));
+    kbuf.st_ino = node->inode;
 
     uint32_t type_flag = S_IFREG;
     if (node->flags == VFS_TYPE_DIRECTORY)
@@ -737,10 +800,13 @@ static int64_t sys_stat(const char *path, struct stat *buf) {
     else if (node->flags == VFS_TYPE_SOCKET)
         type_flag = S_IFSOCK;
 
-    buf->st_mode = type_flag | (node->permissions & 07777);
-    buf->st_size = node->length;
-    buf->st_uid = node->uid;
-    buf->st_gid = node->gid;
+    kbuf.st_mode = type_flag | (node->permissions & 07777);
+    kbuf.st_size = node->length;
+    kbuf.st_uid = node->uid;
+    kbuf.st_gid = node->gid;
+
+    if (!put_user_buffer(buf, &kbuf, sizeof(struct stat)))
+        return -14; /* -EFAULT */
     return 0;
 }
 
@@ -748,16 +814,21 @@ static int64_t sys_lstat(const char *path, struct stat *buf) {
     if (!path || !buf)
         return -22;
 
+    char kpath[256];
+    if (!get_user_string(kpath, path, sizeof(kpath)))
+        return -14; /* -EFAULT */
+
     char full_path[256];
-    if (vfs_resolve_path(path, full_path, sizeof(full_path)) != 0)
+    if (vfs_resolve_path(kpath, full_path, sizeof(full_path)) != 0)
         return -2;
 
     vfs_node_t *node = vfs_lookup_nofollow(full_path);
     if (!node)
         return -2;
 
-    memset(buf, 0, sizeof(struct stat));
-    buf->st_ino = node->inode;
+    struct stat kbuf;
+    memset(&kbuf, 0, sizeof(struct stat));
+    kbuf.st_ino = node->inode;
 
     uint32_t type_flag = S_IFREG;
     if (node->flags == VFS_TYPE_DIRECTORY)
@@ -773,10 +844,13 @@ static int64_t sys_lstat(const char *path, struct stat *buf) {
     else if (node->flags == VFS_TYPE_SOCKET)
         type_flag = S_IFSOCK;
 
-    buf->st_mode = type_flag | (node->permissions & 07777);
-    buf->st_size = node->length;
-    buf->st_uid = node->uid;
-    buf->st_gid = node->gid;
+    kbuf.st_mode = type_flag | (node->permissions & 07777);
+    kbuf.st_size = node->length;
+    kbuf.st_uid = node->uid;
+    kbuf.st_gid = node->gid;
+
+    if (!put_user_buffer(buf, &kbuf, sizeof(struct stat)))
+        return -14; /* -EFAULT */
     return 0;
 }
 
@@ -789,8 +863,9 @@ static int64_t sys_fstat(int fd, struct stat *buf) {
     if (!f->node)
         return -1;
 
-    memset(buf, 0, sizeof(struct stat));
-    buf->st_ino = f->node->inode;
+    struct stat kbuf;
+    memset(&kbuf, 0, sizeof(struct stat));
+    kbuf.st_ino = f->node->inode;
 
     uint32_t type_flag = S_IFREG;
     if (f->node->flags == VFS_TYPE_DIRECTORY)
@@ -806,18 +881,23 @@ static int64_t sys_fstat(int fd, struct stat *buf) {
     else if (f->node->flags == VFS_TYPE_SOCKET)
         type_flag = S_IFSOCK;
 
-    buf->st_mode = type_flag | (f->node->permissions & 07777);
-    buf->st_size = f->node->length;
-    buf->st_uid = f->node->uid;
-    buf->st_gid = f->node->gid;
+    kbuf.st_mode = type_flag | (f->node->permissions & 07777);
+    kbuf.st_size = f->node->length;
+    kbuf.st_uid = f->node->uid;
+    kbuf.st_gid = f->node->gid;
+
+    if (!put_user_buffer(buf, &kbuf, sizeof(struct stat)))
+        return -14; /* -EFAULT */
     return 0;
 }
 
 static int64_t sys_uname(struct utsname *buf) {
     if (!buf)
-        return -1;
-    memset(buf, 0, sizeof(struct utsname));
-    strcpy(buf->sysname, "SzpontOS");
+        return -22;
+
+    struct utsname kubuf;
+    memset(&kubuf, 0, sizeof(struct utsname));
+    strcpy(kubuf.sysname, "SzpontOS");
 
     char hostname[64] = "szpontos";
     vfs_node_t *node = vfs_lookup("/etc/hostname");
@@ -837,36 +917,47 @@ static int64_t sys_uname(struct utsname *buf) {
             }
         }
     }
-    strcpy(buf->nodename, hostname);
-    strcpy(buf->release, "0.1.0");
-    strcpy(buf->version, "SzpontOS 0.1.0 (Higher-Half x86_64)");
-    strcpy(buf->machine, "x86_64");
+    strcpy(kubuf.nodename, hostname);
+    strcpy(kubuf.release, "0.1.0");
+    strcpy(kubuf.version, "SzpontOS 0.1.0 (Higher-Half x86_64)");
+    strcpy(kubuf.machine, "x86_64");
+
+    if (!put_user_buffer(buf, &kubuf, sizeof(struct utsname)))
+        return -14; /* -EFAULT */
     return 0;
 }
 
 static int64_t sys_getcwd(char *buf, size_t size) {
     process_t *proc = sched_get_current_process();
     if (!proc || !buf || size == 0)
-        return -1;
+        return -22;
 
-    strncpy(buf, proc->cwd, size - 1);
-    buf[size - 1] = '\0';
+    size_t cwd_len = strlen(proc->cwd) + 1;
+    if (size < cwd_len)
+        return -34; /* -ERANGE */
+
+    if (!put_user_buffer(buf, proc->cwd, cwd_len))
+        return -14; /* -EFAULT */
     return (int64_t)buf;
 }
 
 static int64_t sys_chdir(const char *path) {
     process_t *proc = sched_get_current_process();
     if (!proc || !path)
-        return -1;
+        return -22;
+
+    char kpath[256];
+    if (!get_user_string(kpath, path, sizeof(kpath)))
+        return -14; /* -EFAULT */
 
     char full_path[256];
-    if (path[0] == '/') {
-        strncpy(full_path, path, sizeof(full_path) - 1);
+    if (kpath[0] == '/') {
+        strncpy(full_path, kpath, sizeof(full_path) - 1);
     } else {
         if (strcmp(proc->cwd, "/") == 0) {
-            ksnprintf(full_path, sizeof(full_path), "/%s", path);
+            ksnprintf(full_path, sizeof(full_path), "/%s", kpath);
         } else {
-            ksnprintf(full_path, sizeof(full_path), "%s/%s", proc->cwd, path);
+            ksnprintf(full_path, sizeof(full_path), "%s/%s", proc->cwd, kpath);
         }
     }
     full_path[sizeof(full_path) - 1] = '\0';
@@ -1734,15 +1825,42 @@ static int64_t sys_writev(int fd, const struct iovec_k *iov, int iovcnt) {
 static int64_t sys_mprotect(void *addr, size_t len, int prot) {
     process_t *proc = sched_get_current_process();
     if (!proc || !addr || len == 0)
-        return -1;
-    uintptr_t start = ALIGN_DOWN((uintptr_t)addr, PAGE_SIZE);
-    uintptr_t end = ALIGN_UP((uintptr_t)addr + len, PAGE_SIZE);
-    uint64_t flags = VMM_FLAG_USER;
-    if (prot & 2) /* PROT_WRITE */
-        flags |= VMM_FLAG_WRITABLE;
+        return -22; /* -EINVAL */
+
+    /* POSIX: addr must be a multiple of the page size */
+    if ((uintptr_t)addr & (PAGE_SIZE - 1))
+        return -22; /* -EINVAL */
+
+    /* Check for integer overflow and canonical userspace boundary */
+    uintptr_t start = (uintptr_t)addr;
+    if (start + len < start || (start + len) > USER_ADDR_MAX)
+        return -12; /* -ENOMEM */
+
+    uintptr_t end = ALIGN_UP(start + len, PAGE_SIZE);
+
+    /* POSIX: If any part of the address range is not mapped, fail with ENOMEM */
     for (uintptr_t p = start; p < end; p += PAGE_SIZE) {
-        uintptr_t phys = vmm_virt_to_phys(proc->pagemap, p);
-        if (phys) {
+        if (vmm_virt_to_phys(proc->pagemap, p) == 0) {
+            return -12; /* -ENOMEM */
+        }
+    }
+
+    /* Compute page table flags */
+    uint64_t flags = 0;
+    if (prot != 0) { /* Not PROT_NONE */
+        flags = VMM_FLAG_PRESENT | VMM_FLAG_USER;
+        if (prot & 2) /* PROT_WRITE */
+            flags |= VMM_FLAG_WRITABLE;
+        if (!(prot & 4)) /* PROT_EXEC not set -> NX bit */
+            flags |= VMM_FLAG_NO_EXECUTE;
+    }
+
+    for (uintptr_t p = start; p < end; p += PAGE_SIZE) {
+        uintptr_t phys = vmm_virt_to_phys(proc->pagemap, p) & PHYS_ADDR_MASK;
+        if (flags == 0) {
+            /* PROT_NONE: unmap page entry so access triggers page fault */
+            vmm_unmap_page(proc->pagemap, p);
+        } else {
             vmm_map_page(proc->pagemap, p, phys, flags);
         }
     }
@@ -1759,10 +1877,16 @@ struct tms_k {
 static int64_t sys_times(struct tms_k *buf) {
     uint64_t ticks = pit_get_ticks();
     if (buf) {
-        buf->tms_utime = (int64_t)(ticks / 2);
-        buf->tms_stime = (int64_t)(ticks / 4);
-        buf->tms_cutime = 0;
-        buf->tms_cstime = 0;
+        process_t *proc = sched_get_current_process();
+        struct tms_k ktms = {0};
+        if (proc) {
+            /* 100 Hz timer tick = 10,000,000 ns per tick */
+            uint64_t proc_ticks = proc->cpu_time_ns / 10000000ULL;
+            ktms.tms_utime = (int64_t)(proc_ticks * 3 / 4);
+            ktms.tms_stime = (int64_t)(proc_ticks / 4);
+        }
+        if (!put_user_buffer(buf, &ktms, sizeof(struct tms_k)))
+            return -14; /* -EFAULT */
     }
     return (int64_t)ticks;
 }
@@ -2197,42 +2321,56 @@ static int kernel_sys_poll(struct pollfd *fds, unsigned int nfds, int timeout) {
 static int64_t sys_gettimeofday(struct timeval_kernel *tv, void *tz) {
     (void)tz;
     if (tv) {
-        rtc_get_timeval(tv);
+        struct timeval_kernel ktv;
+        rtc_get_timeval(&ktv);
+        if (!put_user_buffer(tv, &ktv, sizeof(struct timeval_kernel)))
+            return -14; /* -EFAULT */
     }
     return 0;
 }
 
 static int64_t sys_clock_gettime(int clk_id, struct timespec_kernel *tp) {
     if (!tp)
-        return -1;
+        return -22; /* -EINVAL */
+
+    struct timespec_kernel ktp;
     if (clk_id == 1 || clk_id == 4) { /* CLOCK_MONOTONIC / CLOCK_MONOTONIC_RAW */
-        rtc_get_monotonic(tp);
-        return 0;
+        rtc_get_monotonic(&ktp);
+    } else {
+        /* CLOCK_REALTIME */
+        rtc_get_timespec(&ktp);
     }
-    /* CLOCK_REALTIME */
-    rtc_get_timespec(tp);
+
+    if (!put_user_buffer(tp, &ktp, sizeof(struct timespec_kernel)))
+        return -14; /* -EFAULT */
     return 0;
 }
 
 static int64_t sys_time(int64_t *tloc) {
     int64_t now = (int64_t)rtc_get_current_epoch();
     if (tloc) {
-        *tloc = now;
+        if (!put_user_buffer(tloc, &now, sizeof(int64_t)))
+            return -14; /* -EFAULT */
     }
     return now;
 }
 
 static int64_t sys_nanosleep(const struct timespec_kernel *req, struct timespec_kernel *rem) {
     if (!req)
-        return -1;
-    uint64_t total_ms = (uint64_t)req->tv_sec * 1000 + (uint64_t)(req->tv_nsec / 1000000);
-    if (total_ms == 0 && req->tv_nsec > 0) {
+        return -22; /* -EINVAL */
+
+    struct timespec_kernel kreq;
+    if (!get_user_buffer(&kreq, req, sizeof(struct timespec_kernel)))
+        return -14; /* -EFAULT */
+
+    uint64_t total_ms = (uint64_t)kreq.tv_sec * 1000 + (uint64_t)(kreq.tv_nsec / 1000000);
+    if (total_ms == 0 && kreq.tv_nsec > 0) {
         total_ms = 1;
     }
     thread_sleep((uint32_t)total_ms);
     if (rem) {
-        rem->tv_sec = 0;
-        rem->tv_nsec = 0;
+        struct timespec_kernel krem = {0, 0};
+        put_user_buffer(rem, &krem, sizeof(struct timespec_kernel));
     }
     return 0;
 }

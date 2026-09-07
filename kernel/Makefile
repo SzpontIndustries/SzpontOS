@@ -11,6 +11,7 @@ KERNEL_C_SRCS := \
     $(ROOT_DIR)/kernel/src/mm/vmm.c \
     $(ROOT_DIR)/kernel/src/mm/heap.c \
     $(ROOT_DIR)/kernel/src/mm/shm.c \
+    $(ROOT_DIR)/kernel/src/mm/usercopy.c \
     $(ROOT_DIR)/kernel/src/fs/vfs.c \
     $(ROOT_DIR)/kernel/src/fs/devfs.c \
     $(ROOT_DIR)/kernel/src/fs/bcache.c \
@@ -22,6 +23,7 @@ KERNEL_C_SRCS := \
     $(ROOT_DIR)/kernel/src/sched/process.c \
     $(ROOT_DIR)/kernel/src/sched/futex.c \
     $(ROOT_DIR)/kernel/src/sched/sched.c \
+    $(ROOT_DIR)/kernel/src/sched/waitqueue.c \
     $(ROOT_DIR)/kernel/src/kernel/module.c \
     $(ROOT_DIR)/kernel/src/kernel/ksymtab.c \
     $(ROOT_DIR)/kernel/src/kernel/sysctl.c \

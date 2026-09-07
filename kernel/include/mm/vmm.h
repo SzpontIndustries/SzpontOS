@@ -38,6 +38,7 @@ void vmm_switch_address_space(pagemap_t *map);
 bool vmm_map_page(pagemap_t *map, uintptr_t virt, uintptr_t phys, uint64_t flags);
 bool vmm_unmap_page(pagemap_t *map, uintptr_t virt);
 uintptr_t vmm_virt_to_phys(pagemap_t *map, uintptr_t virt);
+uintptr_t vmm_user_page_phys(pagemap_t *map, uintptr_t virt, bool write);
 bool vmm_alloc_user_page(pagemap_t *map, uintptr_t virt, uint64_t flags);
 pagemap_t *vmm_clone_address_space(pagemap_t *src);
 bool vmm_set_range_flags(pagemap_t *map, uintptr_t virt, size_t size, uint64_t flags);

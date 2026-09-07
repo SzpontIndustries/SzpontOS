@@ -29,6 +29,7 @@ typedef struct thread {
     uintptr_t clear_child_tid;     /* Pointer to clear and wake on thread exit */
 
     uint64_t sleep_until_tick;
+    uint64_t scheduled_at_ns;      /* Monotonic timestamp (ns) when thread started running */
     uintptr_t futex_uaddr;
     struct process *futex_proc;
     int exit_code;

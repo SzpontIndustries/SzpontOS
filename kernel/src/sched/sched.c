@@ -7,6 +7,7 @@
 #include <kernel/spinlock.h>
 #include <kernel/panic.h>
 #include <net/net.h>
+#include <drivers/rtc.h>
 
 static list_node_t g_ready_queue = LIST_HEAD_INIT(g_ready_queue);
 static list_node_t g_sleeping_queue = LIST_HEAD_INIT(g_sleeping_queue);
@@ -66,6 +67,29 @@ process_t *sched_get_current_process(void) {
     return g_current_thread ? g_current_thread->process : NULL;
 }
 
+void sched_block_current_thread(void) {
+    thread_t *curr = sched_get_current_thread();
+    if (!curr)
+        return;
+    uint64_t flags;
+    spinlock_acquire_irqsave(&g_sched_lock, &flags);
+    curr->state = THREAD_BLOCKED;
+    spinlock_release_irqrestore(&g_sched_lock, flags);
+    sched_yield();
+}
+
+void sched_unblock_thread(thread_t *thread) {
+    if (!thread)
+        return;
+    uint64_t flags;
+    spinlock_acquire_irqsave(&g_sched_lock, &flags);
+    if (thread->state == THREAD_BLOCKED) {
+        thread->state = THREAD_READY;
+        list_add_tail(&g_ready_queue, &thread->sched_node);
+    }
+    spinlock_release_irqrestore(&g_sched_lock, flags);
+}
+
 void sched_yield(void) {
     if (!g_sched_started)
         return;
@@ -121,6 +145,20 @@ void sched_yield(void) {
     }
 
     if (prev != next) {
+        /* CPU Time Accounting (atomic CAS/fetch_add inspired by Vinix) */
+        uint64_t now_ns = rtc_get_monotonic_ns();
+        if (prev && prev->process) {
+            uint64_t started = prev->scheduled_at_ns;
+            prev->scheduled_at_ns = 0;
+            if (started > 0 && now_ns > started) {
+                uint64_t span = now_ns - started;
+                __atomic_fetch_add(&prev->process->cpu_time_ns, span, __ATOMIC_RELAXED);
+            }
+        }
+        if (next) {
+            next->scheduled_at_ns = now_ns;
+        }
+
         spinlock_release(&g_sched_lock);
         static uintptr_t boot_rsp = 0;
         uintptr_t *old_rsp_ptr = prev ? &prev->rsp : &boot_rsp;

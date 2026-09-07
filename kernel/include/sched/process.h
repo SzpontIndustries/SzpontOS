@@ -7,6 +7,7 @@
 #include <mm/vmm.h>
 #include <fs/vfs.h>
 #include <sched/thread.h>
+#include <sched/waitqueue.h>
 
 #define MAX_FD 256
 #define NGROUPS_MAX 32
@@ -55,6 +56,8 @@ typedef struct process {
     } shm_mappings[32];
 
     int exit_code;
+    uint64_t cpu_time_ns;
+    wait_queue_t wait_child;
 
     uint32_t pending_signals;
     uint32_t blocked_signals;

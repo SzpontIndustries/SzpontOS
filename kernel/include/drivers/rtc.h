@@ -37,5 +37,6 @@ uint64_t rtc_get_current_epoch(void);
 void rtc_get_timeval(struct timeval_kernel *tv);
 void rtc_get_timespec(struct timespec_kernel *ts);
 void rtc_get_monotonic(struct timespec_kernel *ts);
+uint64_t rtc_get_monotonic_ns(void);
 
 #endif /* SZPONTOS_DRIVERS_RTC_H */

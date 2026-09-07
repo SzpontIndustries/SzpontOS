@@ -287,3 +287,10 @@ void rtc_get_monotonic(struct timespec_kernel *ts) {
     ts->tv_sec = (int64_t)(elapsed_cycles / g_tsc_freq_hz);
     ts->tv_nsec = (int64_t)(((elapsed_cycles % g_tsc_freq_hz) * 1000000000ULL) / g_tsc_freq_hz);
 }
+
+uint64_t rtc_get_monotonic_ns(void) {
+    struct timespec_kernel ts;
+    rtc_get_monotonic(&ts);
+    return (uint64_t)ts.tv_sec * 1000000000ULL + (uint64_t)ts.tv_nsec;
+}
+
