@@ -1,6 +1,10 @@
 #ifndef _SYS_SOCKET_H
 #define _SYS_SOCKET_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <sys/uio.h>
 
@@ -149,5 +153,9 @@ struct ucred {
 };
 
 #define SO_PEERCRED 17
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_SOCKET_H */

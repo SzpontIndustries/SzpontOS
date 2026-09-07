@@ -1,6 +1,10 @@
 #ifndef _FCNTL_H
 #define _FCNTL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define O_RDONLY 0x0000
@@ -52,5 +56,9 @@ struct flock {
 int open(const char *pathname, int flags, ...);
 int openat(int dirfd, const char *pathname, int flags, ...);
 int fcntl(int fd, int cmd, ...);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _FCNTL_H */

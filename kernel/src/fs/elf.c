@@ -220,6 +220,12 @@ static int elf_parse_dynamic(pagemap_t *map, uintptr_t dyn_vaddr, uintptr_t base
         case DT_FINI:
             so->fini_func = base_vaddr + dyn.d_un.d_ptr;
             break;
+        case DT_INIT_ARRAY:
+            so->init_array = base_vaddr + dyn.d_un.d_ptr;
+            break;
+        case DT_INIT_ARRAYSZ:
+            so->init_array_sz = dyn.d_un.d_val;
+            break;
         }
         cur += sizeof(Elf64_Dyn);
     }
@@ -610,6 +616,37 @@ int elf_load_binary(vfs_node_t *file, pagemap_t *map, uintptr_t *out_entry, uint
     }
     /* Finally apply relocations to main executable */
     elf_apply_relocations(map, &loaded_sos[0], loaded_sos, loaded_so_count);
+
+    /* Populate shared library constructors into libc */
+    uintptr_t so_inits[64];
+    size_t so_init_count = 0;
+
+    for (int i = (int)loaded_so_count - 1; i >= 1; i--) {
+        elf_loaded_so_t *cur_so = &loaded_sos[i];
+        if (cur_so->init_func && so_init_count < 64) {
+            so_inits[so_init_count++] = cur_so->init_func;
+        }
+        if (cur_so->init_array && cur_so->init_array_sz > 0) {
+            size_t num_ptrs = cur_so->init_array_sz / sizeof(uintptr_t);
+            for (size_t p = 0; p < num_ptrs && so_init_count < 64; p++) {
+                uintptr_t fn_ptr = 0;
+                elf_read_user_mem(map, cur_so->init_array + p * sizeof(uintptr_t), &fn_ptr, sizeof(uintptr_t));
+                if (fn_ptr) {
+                    so_inits[so_init_count++] = fn_ptr;
+                }
+            }
+        }
+    }
+
+    if (so_init_count > 0) {
+        size_t sym_sz = 0;
+        uintptr_t arr_vaddr = elf_resolve_symbol_ext("__szpont_so_init_array", loaded_sos, loaded_so_count, &sym_sz);
+        uintptr_t cnt_vaddr = elf_resolve_symbol_ext("__szpont_so_init_count", loaded_sos, loaded_so_count, &sym_sz);
+        if (arr_vaddr && cnt_vaddr) {
+            elf_write_user_mem(map, arr_vaddr, so_inits, so_init_count * sizeof(uintptr_t));
+            elf_write_user_mem(map, cnt_vaddr, &so_init_count, sizeof(size_t));
+        }
+    }
 
     /* Clean up temporary kernel heap buffers */
     for (size_t i = 0; i < loaded_so_count; i++) {

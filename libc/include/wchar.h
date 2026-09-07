@@ -6,9 +6,17 @@
 #ifndef _WCHAR_H
 #define _WCHAR_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+#include <stdio.h>
+#include <stdarg.h>
+
+struct tm;
 
 #ifndef WEOF
 #define WEOF ((wint_t) - 1)
@@ -67,5 +75,44 @@ wchar_t *wmemmove(wchar_t *dest, const wchar_t *src, size_t n);
 wchar_t *wmemset(wchar_t *s, wchar_t c, size_t n);
 int wmemcmp(const wchar_t *s1, const wchar_t *s2, size_t n);
 wchar_t *wmemchr(const wchar_t *s, wchar_t c, size_t n);
+
+long wcstol(const wchar_t *nptr, wchar_t **endptr, int base);
+unsigned long wcstoul(const wchar_t *nptr, wchar_t **endptr, int base);
+long long wcstoll(const wchar_t *nptr, wchar_t **endptr, int base);
+unsigned long long wcstoull(const wchar_t *nptr, wchar_t **endptr, int base);
+float wcstof(const wchar_t *nptr, wchar_t **endptr);
+double wcstod(const wchar_t *nptr, wchar_t **endptr);
+long double wcstold(const wchar_t *nptr, wchar_t **endptr);
+
+wint_t btowc(int c);
+int wctob(wint_t c);
+wint_t fgetwc(FILE *stream);
+wchar_t *fgetws(wchar_t *ws, int n, FILE *stream);
+wint_t fputwc(wchar_t wc, FILE *stream);
+int fputws(const wchar_t *ws, FILE *stream);
+int fwide(FILE *stream, int mode);
+wint_t getwc(FILE *stream);
+wint_t getwchar(void);
+wint_t putwc(wchar_t wc, FILE *stream);
+wint_t putwchar(wchar_t wc);
+wint_t ungetwc(wint_t wc, FILE *stream);
+int fwprintf(FILE *stream, const wchar_t *format, ...);
+int fwscanf(FILE *stream, const wchar_t *format, ...);
+int swprintf(wchar_t *ws, size_t n, const wchar_t *format, ...);
+int swscanf(const wchar_t *ws, const wchar_t *format, ...);
+int vfwprintf(FILE *stream, const wchar_t *format, va_list arg);
+int vswprintf(wchar_t *ws, size_t n, const wchar_t *format, va_list arg);
+int vwprintf(const wchar_t *format, va_list arg);
+int wprintf(const wchar_t *format, ...);
+int wscanf(const wchar_t *format, ...);
+size_t wcscspn(const wchar_t *s1, const wchar_t *s2);
+size_t wcsspn(const wchar_t *s1, const wchar_t *s2);
+wchar_t *wcstok(wchar_t *ws1, const wchar_t *ws2, wchar_t **ptr);
+size_t wcsxfrm(wchar_t *ws1, const wchar_t *ws2, size_t n);
+size_t wcsftime(wchar_t *wcs, size_t maxsize, const wchar_t *format, const struct tm *timeptr);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _WCHAR_H */

@@ -1,6 +1,10 @@
 #ifndef _SYS_MMAN_H
 #define _SYS_MMAN_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define PROT_NONE 0x00
@@ -23,5 +27,9 @@ int mlock(const void *addr, size_t len);
 int munlock(const void *addr, size_t len);
 int mlockall(int flags);
 int munlockall(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_MMAN_H */

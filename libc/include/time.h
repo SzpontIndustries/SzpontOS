@@ -1,6 +1,10 @@
 #ifndef _TIME_H
 #define _TIME_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 #include <sys/types.h>
@@ -54,6 +58,7 @@ char *asctime_r(const struct tm *tm, char *buf);
 char *ctime(const time_t *timep);
 char *ctime_r(const time_t *timep, char *buf);
 time_t mktime(struct tm *tm);
+double difftime(time_t time1, time_t time0);
 size_t strftime(char *s, size_t max, const char *format, const struct tm *tm);
 void tzset(void);
 clock_t clock(void);
@@ -62,5 +67,9 @@ int clock_gettime(clockid_t clk_id, struct timespec *tp);
 int clock_settime(clockid_t clk_id, const struct timespec *tp);
 int clock_getres(clockid_t clk_id, struct timespec *res);
 int nanosleep(const struct timespec *req, struct timespec *rem);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _TIME_H */

@@ -6,6 +6,10 @@
 #ifndef _SYS_RESOURCE_H
 #define _SYS_RESOURCE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <sys/time.h>
 
@@ -57,5 +61,9 @@ struct rusage {
 int getrlimit(int resource, struct rlimit *rlim);
 int setrlimit(int resource, const struct rlimit *rlim);
 int getrusage(int who, struct rusage *usage);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_RESOURCE_H */

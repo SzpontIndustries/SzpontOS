@@ -1,6 +1,10 @@
 #ifndef _NET_IF_H
 #define _NET_IF_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/socket.h>
 
 #define IFNAMSIZ 16
@@ -81,5 +85,9 @@ unsigned int if_nametoindex(const char *ifname);
 char *if_indextoname(unsigned int ifindex, char *ifname);
 struct if_nameindex *if_nameindex(void);
 void if_freenameindex(struct if_nameindex *ptr);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _NET_IF_H */

@@ -6,6 +6,10 @@
 #ifndef _SYS_EVENT_H
 #define _SYS_EVENT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <sys/types.h>
 #include <time.h>
@@ -53,5 +57,9 @@ struct kevent {
 int kqueue(void);
 int kevent(int kq, const struct kevent *changelist, int nchanges, struct kevent *eventlist, int nevents,
            const struct timespec *timeout);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_EVENT_H */

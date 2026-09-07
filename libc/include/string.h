@@ -1,6 +1,10 @@
 #ifndef _STRING_H
 #define _STRING_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 void *memcpy(void *dest, const void *src, size_t n);
@@ -57,5 +61,9 @@ int bcmp(const void *s1, const void *s2, size_t n);
 char *index(const char *s, int c);
 #undef rindex
 char *rindex(const char *s, int c);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _STRING_H */

@@ -1,6 +1,10 @@
 #ifndef _SPAWN_H
 #define _SPAWN_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <sched.h>
 #include <signal.h>
@@ -39,5 +43,9 @@ int posix_spawn_file_actions_adddup2(posix_spawn_file_actions_t *file_actions, i
 int posix_spawn_file_actions_addclose(posix_spawn_file_actions_t *file_actions, int fd);
 int posix_spawn_file_actions_addopen(posix_spawn_file_actions_t *file_actions, int fd, const char *path, int oflag,
                                      mode_t mode);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SPAWN_H */

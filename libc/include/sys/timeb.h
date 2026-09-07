@@ -6,6 +6,10 @@
 #ifndef _SYS_TIMEB_H
 #define _SYS_TIMEB_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <time.h>
 
 struct timeb {
@@ -16,5 +20,9 @@ struct timeb {
 };
 
 int ftime(struct timeb *tp);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_TIMEB_H */

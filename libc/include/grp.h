@@ -1,6 +1,10 @@
 #ifndef _GRP_H
 #define _GRP_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 struct group {
@@ -17,5 +21,9 @@ void setgrent(void);
 void endgrent(void);
 int initgroups(const char *user, gid_t group);
 int setgroups(size_t size, const gid_t *list);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _GRP_H */

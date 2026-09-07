@@ -6,6 +6,7 @@
 # ==============================================================================
 ALL_ROOTFS_SOS := \
 	$(LIBC_SO) $(LIBM_SO) \
+	$(LIBSTDCXX_SO) \
 	$(ROOTFS_DIR)/lib/libdrm.so \
 	$(ROOTFS_DIR)/lib/libpixman-1.so \
 	$(ROOTFS_DIR)/lib/libX11.so \
@@ -27,6 +28,15 @@ ALL_ROOTFS_SOS := \
 	$(ROOTFS_DIR)/lib/libcrypto.so \
 	$(ROOTFS_DIR)/lib/libssl.so \
 	$(ROOTFS_DIR)/lib/libcurl.so
+
+# ==============================================================================
+# GNU libstdc++-v3 (Out-of-tree build)
+# ==============================================================================
+$(LIBSTDCXX_SO): $(LIBC_SO) $(LIBM_SO) $(SYSROOT_STAMP)
+	@echo "  [BUILD-LIBSTDCXX] Building GNU libstdc++-v3 runtime & shared library..."
+	@python3 scripts/build_libstdcxx.py third_party/libstdc++ $(BUILD_DIR)/third_party/libstdc++ $(SYSROOT_DIR) $(ROOTFS_DIR)
+
+$(LIBSTDCXX_A): $(LIBSTDCXX_SO)
 
 # ==============================================================================
 # GNU Ncurses (Cross-compiled via original Autotools)

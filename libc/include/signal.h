@@ -1,6 +1,10 @@
 #ifndef _SIGNAL_H
 #define _SIGNAL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define SIGHUP 1
@@ -121,5 +125,9 @@ extern const char *const sys_siglist[];
 
 int sig2str(int signum, char *str);
 int str2sig(const char *str, int *pnum);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SIGNAL_H */

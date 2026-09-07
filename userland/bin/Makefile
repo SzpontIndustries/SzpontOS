@@ -72,7 +72,8 @@ CORE_PROGS := \
     $(ROOTFS_DIR)/bin/szpontdesktop \
     $(ROOTFS_DIR)/bin/szponterm \
     $(ROOTFS_DIR)/bin/curltest \
-    $(ROOTFS_DIR)/bin/mesadrmtest
+    $(ROOTFS_DIR)/bin/mesadrmtest \
+    $(ROOTFS_DIR)/bin/cpptest
 
 .PHONY: all progs
 
@@ -148,6 +149,15 @@ $(ROOTFS_DIR)/bin/mesadrmtest: $(ROOT_DIR)/userland/bin/mesadrmtest.c $(CRT0_O) 
 	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/mesadrmtest.d -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include/libdrm -c $< -o $(BUILD_DIR)/userland/bin/mesadrmtest.o
 	@echo "  [LD]  $@"
 	@$(CC) -O2 -ffreestanding -fno-builtin -nostdlib -B$(abspath $(SYSROOT_DIR))/usr/lib $(CRT0_O) $(BUILD_DIR)/userland/bin/mesadrmtest.o -L$(ROOTFS_DIR)/lib -L$(abspath $(SYSROOT_DIR))/usr/lib -ldrm -lm -lc -o $@
+	@chmod +x $@
+
+# Native C++ Validation Suite linked against libstdc++.so, libm.so, libc.so
+$(ROOTFS_DIR)/bin/cpptest: $(ROOT_DIR)/userland/bin/cpptest.cpp $(CRT0_O) $(CRTI_O) $(CRTN_O) $(LIBC_SO) $(LIBM_SO) $(LIBSTDCXX_SO) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
+	@mkdir -p $(ROOTFS_DIR)/bin $(BUILD_DIR)/userland/bin
+	@echo "  [CXX] $<"
+	@$(CXX) $(USER_CXXFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/cpptest.d -c $< -o $(BUILD_DIR)/userland/bin/cpptest.o
+	@echo "  [LD]  $@"
+	@$(CC) -O2 -ffreestanding -fno-builtin -nostdlib -B$(abspath $(SYSROOT_DIR))/usr/lib $(CRT0_O) $(CRTI_O) $$($(CC) -print-file-name=crtbegin.o) $(BUILD_DIR)/userland/bin/cpptest.o $$($(CC) -print-file-name=crtend.o) $(CRTN_O) -L$(ROOTFS_DIR)/lib -L$(abspath $(SYSROOT_DIR))/usr/lib -lstdc++ -lm -lc -o $@
 	@chmod +x $@
 
 -include $(wildcard $(BUILD_DIR)/userland/bin/*.d)

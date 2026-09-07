@@ -1,6 +1,10 @@
 #ifndef _UNISTD_H
 #define _UNISTD_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define STDIN_FILENO 0
@@ -181,5 +185,9 @@ int64_t syscall(int64_t num, ...);
 int eaccess(const char *path, int mode);
 void *setmode(const char *mode_str);
 mode_t getmode(const void *set, mode_t mode);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _UNISTD_H */

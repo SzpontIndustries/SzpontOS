@@ -1,6 +1,10 @@
 #ifndef _DEVICE_DEVICE_H
 #define _DEVICE_DEVICE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <mach.h>
 #include <sys/mman.h>
 #include <fcntl.h>
@@ -48,5 +52,9 @@ static inline int vm_map(mach_port_t task, vm_address_t *dest, size_t size, vm_a
     *dest = (vm_address_t)ptr;
     return 0;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _DEVICE_DEVICE_H */

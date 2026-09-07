@@ -6,6 +6,7 @@ LIBC_C_SRCS := \
     $(ROOT_DIR)/libc/src/string/string.c \
     $(ROOT_DIR)/libc/src/stdlib/malloc.c \
     $(ROOT_DIR)/libc/src/stdlib/atexit.c \
+    $(ROOT_DIR)/libc/src/stdlib/init_array.c \
     $(ROOT_DIR)/libc/src/stdlib/locale.c \
     $(ROOT_DIR)/libc/src/stdlib/system.c \
     $(ROOT_DIR)/libc/src/stdlib/crypt.c \
@@ -79,8 +80,18 @@ $(BUILD_DIR)/libc/%.o: $(ROOT_DIR)/libc/%.asm
 	@echo "  [ASM-LIBC] $<"
 	@$(NASM) $(ASMFLAGS) $< -o $@
 
-# Assemble crt0.o
+# Assemble crt0.o, crti.o, crtn.o
 $(CRT0_O): $(ROOT_DIR)/libc/src/arch/x86_64/crt0.asm
+	@mkdir -p $(dir $@)
+	@echo "  [ASM] $<"
+	@$(NASM) $(ASMFLAGS) $< -o $@
+
+$(CRTI_O): $(ROOT_DIR)/libc/src/arch/x86_64/crti.asm
+	@mkdir -p $(dir $@)
+	@echo "  [ASM] $<"
+	@$(NASM) $(ASMFLAGS) $< -o $@
+
+$(CRTN_O): $(ROOT_DIR)/libc/src/arch/x86_64/crtn.asm
 	@mkdir -p $(dir $@)
 	@echo "  [ASM] $<"
 	@$(NASM) $(ASMFLAGS) $< -o $@
@@ -118,10 +129,10 @@ $(LIBDL_A):
 LIBC_HEADERS := $(shell find $(ROOT_DIR)/libc/include -type f 2>/dev/null)
 
 # Sysroot Target (cross-compilation root for third-party libraries)
-$(SYSROOT_STAMP): $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(LIBC_SO) $(LIBM_SO) $(LIBC_HEADERS)
+$(SYSROOT_STAMP): $(LIBC_A) $(CRT0_O) $(CRTI_O) $(CRTN_O) $(LIBM_A) $(LIBDL_A) $(LIBC_SO) $(LIBM_SO) $(LIBC_HEADERS)
 	@mkdir -p $(SYSROOT_DIR)/usr/include $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/lib/pkgconfig $(SYSROOT_DIR)/usr/share/pkgconfig $(SYSROOT_DIR)/usr/share/xcb $(SYSROOT_DIR)/usr/include/libdrm $(SYSROOT_DIR)/usr/include/drm $(SYSROOT_DIR)/usr/include/libxcvt $(SYSROOT_DIR)/usr/include/pixman-1 $(SYSROOT_DIR)/usr/include/X11/Xtrans $(SYSROOT_DIR)/usr/include/X11/extensions
 	@cp -R $(ROOT_DIR)/libc/include/. $(SYSROOT_DIR)/usr/include/
-	@cp -f $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(SYSROOT_DIR)/usr/lib/ 2>/dev/null || true
+	@cp -f $(LIBC_A) $(CRT0_O) $(CRTI_O) $(CRTN_O) $(LIBM_A) $(LIBDL_A) $(SYSROOT_DIR)/usr/lib/ 2>/dev/null || true
 	@cp -f $(LIBC_SO) $(LIBM_SO) $(SYSROOT_DIR)/usr/lib/ 2>/dev/null || true
 	@cp -R $(ROOT_DIR)/third_party/xorgproto/include/. $(SYSROOT_DIR)/usr/include/ 2>/dev/null || true
 	@if [ -f $(ROOT_DIR)/third_party/xorgproto/include/X11/Xpoll.h.in ]; then \

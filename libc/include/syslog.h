@@ -1,6 +1,10 @@
 #ifndef _SYSLOG_H
 #define _SYSLOG_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdarg.h>
 
 /* Priorities (values 0-7) */
@@ -55,5 +59,9 @@ void syslog(int priority, const char *format, ...);
 void vsyslog(int priority, const char *format, va_list ap);
 void closelog(void);
 int setlogmask(int mask);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYSLOG_H */

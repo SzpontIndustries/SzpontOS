@@ -1,6 +1,10 @@
 #ifndef _ERRNO_H
 #define _ERRNO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 extern int errno;
 typedef int error_t;
 typedef int errno_t;
@@ -40,7 +44,9 @@ typedef int errno_t;
 #define ERANGE 34       /* Numerical result out of range */
 #define EDEADLK 35      /* Resource deadlock would occur */
 #define ENAMETOOLONG 36 /* File name too long */
+#define ENOLCK 37       /* No record locks available */
 #define ENOSYS 38       /* Function not implemented */
+#define ENOTEMPTY 39    /* Directory not empty */
 #define ELOOP 40        /* Too many levels of symbolic links */
 
 #define EPROTO 71        /* Protocol error */
@@ -80,5 +86,9 @@ typedef int errno_t;
 #define EHOSTUNREACH 113 /* No route to host */
 #define EALREADY 114     /* Operation already in progress */
 #define EINPROGRESS 115  /* Operation now in progress */
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _ERRNO_H */

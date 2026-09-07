@@ -1,6 +1,10 @@
 #ifndef _SYS_TIME_H
 #define _SYS_TIME_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <time.h>
 
@@ -80,5 +84,9 @@ int setitimer(int which, const struct itimerval *new_value, struct itimerval *ol
     (((tsp)->tv_sec == (usp)->tv_sec) ?                                        \
         ((tsp)->tv_nsec cmp (usp)->tv_nsec) :                                  \
         ((tsp)->tv_sec cmp (usp)->tv_sec))
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_TIME_H */

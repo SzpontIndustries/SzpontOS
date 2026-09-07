@@ -1,6 +1,10 @@
 #ifndef _DIRENT_H
 #define _DIRENT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define DT_UNKNOWN 0
@@ -36,5 +40,9 @@ int scandir(const char *dirp, struct dirent ***namelist,
             int (*filter)(const struct dirent *),
             int (*compar)(const struct dirent **, const struct dirent **));
 int alphasort(const struct dirent **a, const struct dirent **b);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _DIRENT_H */

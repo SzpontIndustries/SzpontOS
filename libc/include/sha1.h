@@ -6,6 +6,10 @@
 #ifndef _SHA1_H
 #define _SHA1_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -24,5 +28,9 @@ typedef SHA1_CTX SHA_CTX;
 int SHA1_Init(SHA_CTX *c);
 int SHA1_Update(SHA_CTX *c, const void *data, size_t len);
 int SHA1_Final(unsigned char *md, SHA_CTX *c);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SHA1_H */

@@ -1,6 +1,10 @@
 #ifndef _PTHREAD_H
 #define _PTHREAD_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <time.h>
 #include <sched.h>
@@ -166,5 +170,9 @@ void pthread_testcancel(void);
 
 #include <signal.h>
 int pthread_sigmask(int how, const sigset_t *set, sigset_t *oldset);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _PTHREAD_H */

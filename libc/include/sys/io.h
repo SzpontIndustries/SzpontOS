@@ -6,6 +6,10 @@
 #ifndef _SYS_IO_H
 #define _SYS_IO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 static inline uint8_t inb(uint16_t port) {
@@ -49,5 +53,9 @@ static inline int ioperm(unsigned long from, unsigned long num, int turn_on) {
     (void)turn_on;
     return 0;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_IO_H */

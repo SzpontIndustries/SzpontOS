@@ -1,6 +1,10 @@
 #ifndef _STDLIB_H
 #define _STDLIB_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define EXIT_SUCCESS 0
@@ -21,6 +25,7 @@ void *reallocarray(void *ptr, size_t nmemb, size_t size);
 void free(void *ptr);
 
 void exit(int status) __attribute__((noreturn));
+void _Exit(int status) __attribute__((noreturn));
 void abort(void) __attribute__((noreturn));
 int atexit(void (*function)(void));
 
@@ -54,10 +59,29 @@ int putenv(char *string);
 const char *getprogname(void);
 void setprogname(const char *name);
 
-char *mktemp(char *template);
-int mkstemp(char *template);
-char *mkdtemp(char *template);
-int mkstemps(char *template, int suffixlen);
+typedef struct {
+    int quot;
+    int rem;
+} div_t;
+
+typedef struct {
+    long quot;
+    long rem;
+} ldiv_t;
+
+typedef struct {
+    long long quot;
+    long long rem;
+} lldiv_t;
+
+div_t div(int numer, int denom);
+ldiv_t ldiv(long numer, long denom);
+lldiv_t lldiv(long long numer, long long denom);
+
+char *mktemp(char *tmpl);
+int mkstemp(char *tmpl);
+char *mkdtemp(char *tmpl);
+int mkstemps(char *tmpl, int suffixlen);
 char *realpath(const char *path, char *resolved_path);
 
 int posix_openpt(int flags);
@@ -75,5 +99,9 @@ int mblen(const char *s, size_t n);
 size_t mbstowcs(wchar_t *dest, const char *src, size_t n);
 size_t wcstombs(char *dest, const wchar_t *src, size_t n);
 int system(const char *command);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _STDLIB_H */

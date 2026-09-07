@@ -155,9 +155,17 @@ size_t malloc_usable_size(void *ptr) {
 }
 
 extern void __execute_atexit(void);
+extern void __cxa_finalize(void *dso);
+extern void __libc_fini_array(void);
 
 void exit(int status) {
+    __cxa_finalize(NULL);
+    __libc_fini_array();
     __execute_atexit();
+    _exit(status);
+}
+
+void _Exit(int status) {
     _exit(status);
 }
 
@@ -168,6 +176,27 @@ void abort(void) {
 void __assert_fail(const char *assertion, const char *file, unsigned int line, const char *function) {
     fprintf(stderr, "Assertion failed: %s (%s: %s: %u)\n", assertion, file, function, line);
     abort();
+}
+
+div_t div(int numer, int denom) {
+    div_t r;
+    r.quot = numer / denom;
+    r.rem = numer % denom;
+    return r;
+}
+
+ldiv_t ldiv(long numer, long denom) {
+    ldiv_t r;
+    r.quot = numer / denom;
+    r.rem = numer % denom;
+    return r;
+}
+
+lldiv_t lldiv(long long numer, long long denom) {
+    lldiv_t r;
+    r.quot = numer / denom;
+    r.rem = numer % denom;
+    return r;
 }
 
 int atoi(const char *nptr) {

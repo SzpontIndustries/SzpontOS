@@ -1,6 +1,10 @@
 #ifndef _UTMP_H
 #define _UTMP_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <sys/time.h>
 
@@ -55,5 +59,9 @@ struct utmp *getutline(const struct utmp *ut);
 struct utmp *pututline(const struct utmp *ut);
 int utmpname(const char *file);
 int login_tty(int fd);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _UTMP_H */

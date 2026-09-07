@@ -6,6 +6,10 @@
 #ifndef _SYS_IPC_H
 #define _SYS_IPC_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define IPC_PRIVATE ((key_t)0)
@@ -38,5 +42,9 @@ struct ipc_perm {
 };
 
 key_t ftok(const char *pathname, int proj_id);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_IPC_H */

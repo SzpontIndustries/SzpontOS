@@ -109,3 +109,6 @@
 [submodule "third_party/openssh"]
 	path = third_party/openssh
 	url = https://github.com/openssh/openssh-portable
+[submodule "third_party/libstdc++"]
+	path = third_party/libstdc++
+	url = https://github.com/latentPrion/libstdcxx-v3.git

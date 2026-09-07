@@ -6,6 +6,10 @@
 #ifndef _TERMIOS_H
 #define _TERMIOS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <sys/ioctl.h>
 
@@ -164,5 +168,9 @@ speed_t cfgetospeed(const struct termios *termios_p);
 int cfsetispeed(struct termios *termios_p, speed_t speed);
 int cfsetospeed(struct termios *termios_p, speed_t speed);
 int tcsetsid(int fd, pid_t pid);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _TERMIOS_H */

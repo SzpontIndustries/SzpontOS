@@ -7,6 +7,10 @@
 #ifndef _RESOLV_H_
 #define _RESOLV_H_
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -65,5 +69,9 @@ int res_send(const unsigned char *msg, int msglen, unsigned char *answer, int an
 int dn_expand(const unsigned char *msg, const unsigned char *eomorig,
               const unsigned char *comp_dn, char *exp_dn, int length);
 void res_close(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* !_RESOLV_H_ */

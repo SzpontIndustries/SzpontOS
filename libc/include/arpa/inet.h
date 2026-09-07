@@ -1,6 +1,10 @@
 #ifndef _ARPA_INET_H
 #define _ARPA_INET_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <netinet/in.h>
 #include <inttypes.h>
 #include <sys/types.h>
@@ -20,6 +24,10 @@ const char *inet_ntop(int af, const void *src, char *dst, socklen_t size);
 #define ntohs(x) __builtin_bswap16(x)
 #define htonl(x) __builtin_bswap32(x)
 #define ntohl(x) __builtin_bswap32(x)
+#endif
+
+#ifdef __cplusplus
+}
 #endif
 
 #endif /* _ARPA_INET_H */

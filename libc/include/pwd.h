@@ -1,6 +1,10 @@
 #ifndef _PWD_H
 #define _PWD_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 struct passwd {
@@ -25,5 +29,9 @@ int getpwuid_r(uid_t uid, struct passwd *pwd, char *buf, size_t buflen, struct p
 struct passwd *getpwent(void);
 void setpwent(void);
 void endpwent(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _PWD_H */

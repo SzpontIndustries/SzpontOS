@@ -1,6 +1,10 @@
 #ifndef _SYS_WAIT_H
 #define _SYS_WAIT_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define WNOHANG 1
@@ -22,5 +26,9 @@ pid_t wait(int *wstatus);
 pid_t waitpid(pid_t pid, int *wstatus, int options);
 pid_t wait3(int *wstatus, int options, struct rusage *rusage);
 pid_t wait4(pid_t pid, int *wstatus, int options, struct rusage *rusage);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_WAIT_H */

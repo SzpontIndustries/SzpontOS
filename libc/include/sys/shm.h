@@ -6,6 +6,10 @@
 #ifndef _SYS_SHM_H
 #define _SYS_SHM_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <sys/ipc.h>
 
@@ -55,5 +59,9 @@ int shmget(key_t key, size_t size, int shmflg);
 void *shmat(int shmid, const void *shmaddr, int shmflg);
 int shmdt(const void *shmaddr);
 int shmctl(int shmid, int cmd, struct shmid_ds *buf);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_SHM_H */

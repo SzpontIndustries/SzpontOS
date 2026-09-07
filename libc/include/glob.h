@@ -6,6 +6,10 @@
 #ifndef _GLOB_H
 #define _GLOB_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <stddef.h>
 
@@ -39,5 +43,9 @@ typedef struct {
 
 int glob(const char *pattern, int flags, int (*errfunc)(const char *epath, int eerrno), glob_t *pglob);
 void globfree(glob_t *pglob);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _GLOB_H */

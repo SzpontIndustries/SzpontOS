@@ -6,6 +6,10 @@
 #ifndef _SHADOW_H
 #define _SHADOW_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <paths.h>
 #include <stddef.h>
 #include <stdio.h>
@@ -30,5 +34,9 @@ struct spwd *getspnam(const char *name);
 struct spwd *getspent(void);
 void setspent(void);
 void endspent(void);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SHADOW_H */

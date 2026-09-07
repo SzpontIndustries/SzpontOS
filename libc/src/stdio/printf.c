@@ -1060,3 +1060,49 @@ int pclose(FILE *stream) {
     if (stream) fclose(stream);
     return 0;
 }
+
+#undef getc
+#undef putc
+
+int getc(FILE *stream) {
+    return fgetc(stream);
+}
+
+int putc(int c, FILE *stream) {
+    return fputc(c, stream);
+}
+
+int fgetpos(FILE *stream, fpos_t *pos) {
+    if (!stream || !pos) {
+        errno = EINVAL;
+        return -1;
+    }
+    long o = ftell(stream);
+    if (o < 0) return -1;
+    *pos = (fpos_t)o;
+    return 0;
+}
+
+int fsetpos(FILE *stream, const fpos_t *pos) {
+    if (!stream || !pos) {
+        errno = EINVAL;
+        return -1;
+    }
+    return fseek(stream, (long)*pos, SEEK_SET);
+}
+
+FILE *tmpfile(void) {
+    return fopen("/tmp/tmpfile", "w+b");
+}
+
+int vscanf(const char *format, va_list ap) {
+    return vfscanf(stdin, format, ap);
+}
+
+int scanf(const char *format, ...) {
+    va_list ap;
+    va_start(ap, format);
+    int ret = vscanf(format, ap);
+    va_end(ap);
+    return ret;
+}

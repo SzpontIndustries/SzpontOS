@@ -6,6 +6,10 @@
 #ifndef _NETINET_IP_H
 #define _NETINET_IP_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <netinet/in.h>
 #include <endian.h>
@@ -72,5 +76,9 @@ struct ip {
 #define IPTOS_DSCP_AF42 0x90
 #define IPTOS_DSCP_AF43 0x98
 #define IPTOS_DSCP_EF   0xb8
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _NETINET_IP_H */

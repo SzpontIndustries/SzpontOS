@@ -6,6 +6,10 @@
 #ifndef _SYS_IOCTL_H
 #define _SYS_IOCTL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define TCGETS 0x5401
@@ -68,5 +72,9 @@ struct winsize {
 #define _IOWR(type, nr, size) _IOC(_IOC_READ | _IOC_WRITE, (type), (nr), sizeof(size))
 
 int ioctl(int fd, unsigned long request, ...);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_IOCTL_H */

@@ -6,6 +6,10 @@
 #ifndef _STRINGS_H
 #define _STRINGS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <string.h>
 
 int strcasecmp(const char *s1, const char *s2);
@@ -23,5 +27,9 @@ void bzero(void *s, size_t n);
 char *index(const char *s, int c);
 #undef rindex
 char *rindex(const char *s, int c);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _STRINGS_H */

@@ -1,6 +1,10 @@
 #ifndef _POLL_H
 #define _POLL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 
 #define POLLIN     0x0001
@@ -28,5 +32,9 @@ struct pollfd {
 
 int poll(struct pollfd *fds, nfds_t nfds, int timeout);
 int ppoll(struct pollfd *fds, nfds_t nfds, const struct timespec *tmo_p, const sigset_t *sigmask);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _POLL_H */

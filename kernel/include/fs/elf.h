@@ -201,6 +201,8 @@ typedef struct elf_loaded_so {
     uintptr_t *pltgot;
     uintptr_t init_func;
     uintptr_t fini_func;
+    uintptr_t init_array;
+    size_t init_array_sz;
 } elf_loaded_so_t;
 
 int elf_load_binary(vfs_node_t *file, pagemap_t *map, uintptr_t *out_entry, uintptr_t *out_user_stack,

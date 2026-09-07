@@ -1,6 +1,10 @@
 #ifndef _SYS_STATVFS_H
 #define _SYS_STATVFS_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 #include <sys/types.h>
@@ -41,5 +45,9 @@ int fstatvfs(int fd, struct statvfs *buf);
 
 #define ST_RDONLY 1
 #define ST_NOSUID 2
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_STATVFS_H */

@@ -6,6 +6,10 @@
 #ifndef _SHA_H
 #define _SHA_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <stddef.h>
 
@@ -35,5 +39,9 @@ static inline int SHA1_Final(unsigned char *md, SHA1_CTX *c) {
     SHA1Final(md, c);
     return 1;
 }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SHA_H */

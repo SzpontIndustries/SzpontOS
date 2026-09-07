@@ -200,3 +200,7 @@ size_t strftime(char *s, size_t max, const char *format, const struct tm *tm) {
 }
 
 void tzset(void) {}
+
+double difftime(time_t time1, time_t time0) {
+    return (double)(time1 - time0);
+}

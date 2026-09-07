@@ -1,6 +1,10 @@
 #ifndef _NETINET_IN_H
 #define _NETINET_IN_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 #include <sys/socket.h>
 
@@ -120,5 +124,9 @@ uint32_t (ntohl)(uint32_t x);
 
 extern const struct in6_addr in6addr_any;
 #define IN6ADDR_ANY_INIT { { 0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0 } }
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _NETINET_IN_H */

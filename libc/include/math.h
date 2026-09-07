@@ -152,6 +152,16 @@ float ldexpf(float x, int exp);
 float frexpf(float x, int *exp);
 float modff(float x, float *iptr);
 
+long double frexpl(long double x, int *exp);
+long double modfl(long double x, long double *iptr);
+
+double tgamma(double x);
+float tgammaf(float x);
+long double tgammal(long double x);
+double lgamma(double x);
+float lgammaf(float x);
+long double lgammal(long double x);
+
 #ifdef __cplusplus
 }
 #endif

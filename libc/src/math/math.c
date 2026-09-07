@@ -255,6 +255,10 @@ float frexpf(float x, int *exp) {
     return (float)frexp((double)x, exp);
 }
 
+long double frexpl(long double x, int *exp) {
+    return (long double)frexp((double)x, exp);
+}
+
 double modf(double x, double *iptr) {
     if (isnan(x) || isinf(x)) {
         if (iptr)
@@ -272,6 +276,14 @@ float modff(float x, float *iptr) {
     float r = (float)modf((double)x, &d);
     if (iptr)
         *iptr = (float)d;
+    return r;
+}
+
+long double modfl(long double x, long double *iptr) {
+    double d;
+    long double r = (long double)modf((double)x, &d);
+    if (iptr)
+        *iptr = (long double)d;
     return r;
 }
 
@@ -789,4 +801,49 @@ double nextafter(double x, double y) {
 
 double nexttoward(double x, long double y) {
     return nextafter(x, (double)y);
+}
+
+static const double _gamma_p[] = {
+    676.5203681218851,
+    -1259.1392167224028,
+    771.32342877765313,
+    -176.61502916214059,
+    12.507343278686905,
+    -0.138571095836524,
+    9.9843695780195716e-6,
+    1.5056327351493116e-7
+};
+
+double tgamma(double x) {
+    if (x < 0.5) {
+        return 3.14159265358979323846 / (sin(3.14159265358979323846 * x) * tgamma(1.0 - x));
+    }
+    x -= 1.0;
+    double a = 0.99999999999980993;
+    double t = x + 7.5;
+    for (int i = 0; i < 8; i++) {
+        a += _gamma_p[i] / (x + (double)(i + 1));
+    }
+    return sqrt(2.0 * 3.14159265358979323846) * pow(t, x + 0.5) * exp(-t) * a;
+}
+
+float tgammaf(float x) {
+    return (float)tgamma((double)x);
+}
+
+long double tgammal(long double x) {
+    return (long double)tgamma((double)x);
+}
+
+double lgamma(double x) {
+    double g = tgamma(x);
+    return log(fabs(g));
+}
+
+float lgammaf(float x) {
+    return (float)lgamma((double)x);
+}
+
+long double lgammal(long double x) {
+    return (long double)lgamma((double)x);
 }

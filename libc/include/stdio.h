@@ -1,6 +1,10 @@
 #ifndef _STDIO_H
 #define _STDIO_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <stdarg.h>
 
@@ -61,14 +65,25 @@ int ferror(FILE *stream);
 void clearerr(FILE *stream);
 int fileno(FILE *stream);
 
+typedef off_t fpos_t;
+
+int fgetpos(FILE *stream, fpos_t *pos);
+int fsetpos(FILE *stream, const fpos_t *pos);
+
 int fgetc(FILE *stream);
 char *fgets(char *s, int size, FILE *stream);
 int fputc(int c, FILE *stream);
 int fputs(const char *s, FILE *stream);
 int ungetc(int c, FILE *stream);
 
+int getc(FILE *stream);
+int putc(int c, FILE *stream);
+FILE *tmpfile(void);
+
+#ifndef __cplusplus
 #define getc(stream) fgetc(stream)
 #define putc(c, stream) fputc(c, stream)
+#endif
 
 ssize_t getdelim(char **lineptr, size_t *n, int delimiter, FILE *stream);
 ssize_t getline(char **lineptr, size_t *n, FILE *stream);
@@ -86,6 +101,8 @@ int vdprintf(int fd, const char *format, va_list ap);
 int asprintf(char **strp, const char *format, ...) __attribute__((format(printf, 2, 3)));
 int vasprintf(char **strp, const char *format, va_list ap);
 
+int scanf(const char *format, ...) __attribute__((format(scanf, 1, 2)));
+int vscanf(const char *format, va_list ap);
 int sscanf(const char *str, const char *format, ...);
 int vsscanf(const char *str, const char *format, va_list ap);
 int fscanf(FILE *stream, const char *format, ...);
@@ -101,5 +118,9 @@ int remove(const char *pathname);
 
 #define setlinebuf(stream) setvbuf((stream), NULL, _IOLBF, 0)
 #define setbuffer(stream, buf, size) setvbuf((stream), (buf), (buf) ? _IOFBF : _IONBF, (size))
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _STDIO_H */

@@ -1,6 +1,10 @@
 #ifndef _NETDB_H
 #define _NETDB_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <sys/param.h>
@@ -77,5 +81,9 @@ struct servent *getservbyname(const char *name, const char *proto);
 struct servent *getservbyport(int port, const char *proto);
 const char *hstrerror(int err);
 void herror(const char *s);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _NETDB_H */

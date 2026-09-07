@@ -1,6 +1,10 @@
 #ifndef _SEMAPHORE_H
 #define _SEMAPHORE_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <sys/types.h>
 #include <time.h>
 
@@ -18,5 +22,9 @@ int sem_trywait(sem_t *sem);
 int sem_timedwait(sem_t *sem, const struct timespec *abs_timeout);
 int sem_post(sem_t *sem);
 int sem_getvalue(sem_t *sem, int *sval);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SEMAPHORE_H */

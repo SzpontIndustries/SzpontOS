@@ -41,6 +41,19 @@ else
     TOOLCHAIN_TYPE := clang
 endif
 
+# C++ Compiler detection
+ifneq ($(shell which x86_64-elf-g++ 2>/dev/null),)
+    CXX := x86_64-elf-g++
+else ifneq ($(shell which x86_64-linux-gnu-g++ 2>/dev/null),)
+    CXX := x86_64-linux-gnu-g++
+else ifeq ($(shell uname -s),Linux)
+    CXX := g++
+else ifneq ($(shell which /opt/homebrew/opt/llvm/bin/clang++ 2>/dev/null),)
+    CXX := /opt/homebrew/opt/llvm/bin/clang++
+else
+    CXX := clang++
+endif
+
 # Linker detection
 ifneq ($(shell which x86_64-elf-ld 2>/dev/null),)
     LD := x86_64-elf-ld
@@ -99,12 +112,16 @@ DISK_IMAGE := $(BUILD_DIR)/disk.img
 
 # Core Libraries & Objects
 CRT0_O     := $(BUILD_DIR)/libc/crt0.o
+CRTI_O     := $(BUILD_DIR)/libc/crti.o
+CRTN_O     := $(BUILD_DIR)/libc/crtn.o
 LIBC_A     := $(BUILD_DIR)/libc/libc.a
 LIBC_SO    := $(ROOTFS_DIR)/lib/libc.so
 LIBM_A     := $(BUILD_DIR)/libc/libm.a
 LIBM_SO    := $(ROOTFS_DIR)/lib/libm.so
 LIBDL_A    := $(BUILD_DIR)/libc/libdl.a
 LIBCALC_SO := $(ROOTFS_DIR)/lib/libcalc.so
+LIBSTDCXX_SO := $(ROOTFS_DIR)/lib/libstdc++.so
+LIBSTDCXX_A  := $(SYSROOT_DIR)/usr/lib/libstdc++.a
 
 # Third-party Ports Targets
 NCURSES_BUILD_DIR   := $(BUILD_DIR)/third_party/ncurses
@@ -204,7 +221,8 @@ USER_PROGS := \
     $(ROOTFS_DIR)/bin/unixtest \
     $(ROOTFS_DIR)/bin/gittest \
     $(ROOTFS_DIR)/bin/openssl \
-    $(ROOTFS_DIR)/bin/curl
+    $(ROOTFS_DIR)/bin/curl \
+    $(ROOTFS_DIR)/bin/cpptest
 
 
 # ==============================================================================
@@ -268,6 +286,33 @@ USER_CFLAGS := \
 
 ifeq ($(TOOLCHAIN_TYPE),clang)
     USER_CFLAGS += -target $(ARCH)-unknown-none-elf
+endif
+
+# Userland C++ Compilation Flags
+USER_CXXFLAGS := \
+    -ffreestanding \
+    -fno-stack-protector \
+    -fno-stack-check \
+    -fno-lto \
+    -fPIC \
+    -mno-red-zone \
+    -Wall \
+    -Wextra \
+    -std=gnu++17 \
+    -O2 \
+    -g \
+    -MMD \
+    -MP \
+    -nostdinc++ \
+    -isystem $(SYSROOT_DIR)/usr/include/c++ \
+    -isystem $(SYSROOT_DIR)/usr/include/c++/bits \
+    -isystem $(SYSROOT_DIR)/usr/include/c++/backward \
+    -isystem $(SYSROOT_DIR)/usr/include/c++/ext \
+    -isystem $(SYSROOT_DIR)/usr/include \
+    -I $(SYSROOT_DIR)/usr/include
+
+ifeq ($(TOOLCHAIN_TYPE),clang)
+    USER_CXXFLAGS += -target $(ARCH)-unknown-none-elf
 endif
 
 USER_LDFLAGS := \

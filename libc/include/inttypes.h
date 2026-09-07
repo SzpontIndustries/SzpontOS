@@ -1,6 +1,10 @@
 #ifndef _INTTYPES_H
 #define _INTTYPES_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 #define PRId8 "d"
@@ -65,5 +69,9 @@
 intmax_t strtoimax(const char *nptr, char **endptr, int base);
 uintmax_t strtoumax(const char *nptr, char **endptr, int base);
 intmax_t imaxabs(intmax_t j);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _INTTYPES_H */

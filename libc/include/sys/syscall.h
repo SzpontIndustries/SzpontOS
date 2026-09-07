@@ -1,6 +1,10 @@
 #ifndef _SYS_SYSCALL_H
 #define _SYS_SYSCALL_H
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #include <stdint.h>
 
 #define SYS_read 0
@@ -150,5 +154,9 @@ int64_t __syscall3(int64_t num, int64_t a1, int64_t a2, int64_t a3);
 int64_t __syscall4(int64_t num, int64_t a1, int64_t a2, int64_t a3, int64_t a4);
 int64_t __syscall5(int64_t num, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5);
 int64_t __syscall6(int64_t num, int64_t a1, int64_t a2, int64_t a3, int64_t a4, int64_t a5, int64_t a6);
+
+#ifdef __cplusplus
+}
+#endif
 
 #endif /* _SYS_SYSCALL_H */
