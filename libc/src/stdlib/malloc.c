@@ -23,6 +23,10 @@ static block_header_t *g_head = NULL;
 void *malloc(size_t size) {
     if (size == 0)
         size = ALIGNMENT;
+    if (size > (size_t)INTPTR_MAX - HEADER_SIZE - (ALIGNMENT - 1)) {
+        errno = ENOMEM;
+        return NULL;
+    }
     size = ALIGN_UP(size, ALIGNMENT);
 
     /* Search free list with best-fit / first-fit with splitting */
@@ -102,6 +106,10 @@ void *realloc(void *ptr, size_t size) {
     if (size == 0)
         size = ALIGNMENT;
 
+    if (size > (size_t)INTPTR_MAX - HEADER_SIZE - (ALIGNMENT - 1)) {
+        errno = ENOMEM;
+        return NULL;
+    }
     size = ALIGN_UP(size, ALIGNMENT);
     block_header_t *block = (block_header_t *)((uintptr_t)ptr - HEADER_SIZE);
     if (block->size >= size) {

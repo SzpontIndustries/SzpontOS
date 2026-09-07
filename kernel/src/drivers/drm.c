@@ -737,7 +737,7 @@ static int drm_mmap_bo_locked(drm_dumb_bo_t *bo, void *addr, size_t length, int 
     (void)flags;
 
     process_t *proc = sched_get_current_process();
-    if (!proc || !out_vaddr || length == 0)
+    if (!proc || !out_vaddr || length == 0 || length > VMM_USER_END - PAGE_SIZE)
         return -22;
 
     if (proc->mmap_current == 0) {
@@ -746,19 +746,29 @@ static int drm_mmap_bo_locked(drm_dumb_bo_t *bo, void *addr, size_t length, int 
 
     size_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
     if (pages > bo->num_pages)
-        pages = bo->num_pages;
+        return -22;
 
     uintptr_t vaddr = (uintptr_t)addr;
     if (vaddr == 0) {
         vaddr = proc->mmap_current;
-        proc->mmap_current += pages * PAGE_SIZE;
+    }
+    if ((vaddr & (PAGE_SIZE - 1)) || !vmm_user_range(vaddr, pages * PAGE_SIZE)) {
+        return -22;
     }
 
     for (size_t i = 0; i < pages; i++) {
         uintptr_t phys = bo->phys_pages[i];
-        vmm_map_page(proc->pagemap, vaddr + i * PAGE_SIZE, phys,
-                     VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER);
+        vmm_release_user_page(proc->pagemap, vaddr + i * PAGE_SIZE);
+        if (!vmm_map_page(proc->pagemap, vaddr + i * PAGE_SIZE, phys,
+                          VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_BORROWED)) {
+            for (size_t j = 0; j < i; j++)
+                vmm_release_user_page(proc->pagemap, vaddr + j * PAGE_SIZE);
+            return -12;
+        }
     }
+
+    if (vaddr + pages * PAGE_SIZE > proc->mmap_current)
+        proc->mmap_current = vaddr + pages * PAGE_SIZE;
 
     *out_vaddr = (void *)vaddr;
     return 0;

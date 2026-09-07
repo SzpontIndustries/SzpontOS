@@ -80,7 +80,7 @@ int shm_get(key_t key, size_t size, int shmflg, int *out_shmid) {
         return -2; /* ENOENT */
     }
 
-    if (size == 0) {
+    if (size == 0 || size > VMM_USER_END - PAGE_SIZE) {
         spinlock_release(&g_shm_lock);
         return -22; /* EINVAL */
     }
@@ -174,15 +174,31 @@ void *shm_at(int shmid, const void *shmaddr, int shmflg, process_t *proc) {
     uintptr_t vaddr = (uintptr_t)shmaddr;
     if (vaddr == 0) {
         vaddr = proc->mmap_current;
-        proc->mmap_current += seg->num_pages * PAGE_SIZE;
+    }
+    if ((vaddr & (PAGE_SIZE - 1)) || !vmm_user_range(vaddr, seg->num_pages * PAGE_SIZE)) {
+        spinlock_release(&g_shm_lock);
+        return (void *)-22;
+    }
+    for (size_t i = 0; i < seg->num_pages; i++) {
+        if (vmm_virt_to_phys(proc->pagemap, vaddr + i * PAGE_SIZE)) {
+            spinlock_release(&g_shm_lock);
+            return (void *)-22;
+        }
     }
 
     /* Map physical frames directly into process address space */
     for (size_t i = 0; i < seg->num_pages; i++) {
-        vmm_map_page(proc->pagemap, vaddr + i * PAGE_SIZE, seg->phys_pages[i],
-                     VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER);
+        if (!vmm_map_page(proc->pagemap, vaddr + i * PAGE_SIZE, seg->phys_pages[i],
+                          VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER | VMM_FLAG_BORROWED)) {
+            for (size_t j = 0; j < i; j++)
+                vmm_release_user_page(proc->pagemap, vaddr + j * PAGE_SIZE);
+            spinlock_release(&g_shm_lock);
+            return (void *)-12;
+        }
     }
 
+    if (vaddr + seg->num_pages * PAGE_SIZE > proc->mmap_current)
+        proc->mmap_current = vaddr + seg->num_pages * PAGE_SIZE;
     proc->shm_mappings[map_idx].shmid = seg->shmid;
     proc->shm_mappings[map_idx].vaddr = vaddr;
     proc->shm_mappings[map_idx].size = seg->size;
@@ -222,7 +238,9 @@ int shm_dt(const void *shmaddr, process_t *proc) {
     /* Unmap pages from process */
     if (seg) {
         for (size_t i = 0; i < seg->num_pages; i++) {
-            vmm_unmap_page(proc->pagemap, vaddr + i * PAGE_SIZE);
+            uintptr_t virt = vaddr + i * PAGE_SIZE;
+            if (vmm_virt_to_phys(proc->pagemap, virt) == seg->phys_pages[i])
+                vmm_release_user_page(proc->pagemap, virt);
         }
     }
 

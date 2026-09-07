@@ -88,6 +88,10 @@ process_t *process_create(const char *name) {
     spinlock_acquire(&g_process_lock);
 
     process_t *proc = (process_t *)kzalloc(sizeof(process_t));
+    if (!proc) {
+        spinlock_release(&g_process_lock);
+        return NULL;
+    }
     proc->pid = g_next_pid++;
     proc->ppid = 0;
     proc->pgid = proc->pid;
@@ -102,6 +106,11 @@ process_t *process_create(const char *name) {
     strncpy(proc->name, name ? name : "process", sizeof(proc->name) - 1);
     proc->status = PROCESS_ACTIVE;
     proc->pagemap = vmm_create_address_space();
+    if (!proc->pagemap) {
+        kfree(proc);
+        spinlock_release(&g_process_lock);
+        return NULL;
+    }
     proc->brk_start = 0x0000000000800000;
     proc->brk_current = proc->brk_start;
     proc->mmap_current = 0x0000600000000000ULL;

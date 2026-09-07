@@ -19,6 +19,13 @@
 #define KBD_MOD_CAPSLOCK (1 << 6)
 #define KBD_MOD_NUMLOCK (1 << 7)
 
+/* AUX setup holds the same lock as IRQ and keyboard command processing. */
+uint64_t keyboard_controller_acquire(void);
+void keyboard_controller_release(uint64_t flags);
+bool keyboard_aux_command(uint8_t cmd);
+int keyboard_aux_read(uint32_t timeout_us);
+bool keyboard_configure_aux(bool irq_enabled);
+
 void keyboard_init(void);
 void keyboard_poll_hardware(void);
 void keyboard_relax(void);

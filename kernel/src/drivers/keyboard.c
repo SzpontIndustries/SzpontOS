@@ -105,17 +105,24 @@ static int g_e1_pause_state = 0;     /* 0xE1 pause key sequence counter */
 static bool g_set2_release = false;  /* 0xF0 prefix received in Set 2 */
 static bool g_i8042_present = false;
 static spinlock_t g_i8042_lock = SPINLOCK_INIT;
+static uint8_t g_controller_config;
 
 static inline uint64_t kbd_irqsave(void) {
-    uint64_t rflags;
+    uint64_t rflags = 0;
+#if defined(__x86_64__) || defined(_M_X64)
     __asm__ volatile("pushfq; popq %0; cli" : "=r"(rflags) :: "memory");
+#endif
     return rflags;
 }
 
 static inline void kbd_irqrestore(uint64_t rflags) {
+#if defined(__x86_64__) || defined(_M_X64)
     if (rflags & (1 << 9)) {
         __asm__ volatile("sti" ::: "memory");
     }
+#else
+    (void)rflags;
+#endif
 }
 
 /* ==============================================================================
@@ -177,6 +184,21 @@ static inline void kbd_write_data(uint8_t data) {
     io_wait();
 }
 
+static void kbd_deliver_byte(uint8_t status, uint8_t data) {
+    if (status & (KBDS_TIMEOUT_ERR | KBDS_PARITY_ERR)) {
+        g_extended = false;
+        g_set2_release = false;
+        g_e1_pause_state = 0;
+        return;
+    }
+    if (status & KBDS_AUX_OBF) {
+        if (ps2_mouse_is_enabled())
+            ps2_mouse_handle_byte(data);
+    } else {
+        process_scancode(data);
+    }
+}
+
 /*
  * Wait for Input Buffer (IBF) to become clear before writing.
  * Follows FreeBSD atkbdc model: If Output Buffer (OBF) is full while waiting for IBF,
@@ -193,11 +215,7 @@ static bool kbd_wait_write(uint32_t timeout_us) {
         /* If OBF is set while waiting for IBF, drain it to unblock controller */
         if (status != 0xFF && (status & KBDS_OBF)) {
             uint8_t data = kbd_read_data();
-            if ((status & KBDS_AUX_OBF) && ps2_mouse_is_enabled()) {
-                ps2_mouse_handle_byte(data);
-            } else {
-                process_scancode(data);
-            }
+            kbd_deliver_byte(status, data);
         }
 
         udelay(50);
@@ -227,16 +245,9 @@ static bool kbd_wait_read(uint32_t timeout_us) {
 void keyboard_drain_buffers(void) {
     for (int i = 0; i < 128; i++) {
         uint8_t status = kbd_read_status();
-        if (status == 0xFF || !(status & KBDS_OBF)) {
+        if (status == 0xFF || !(status & KBDS_OBF))
             break;
-        }
-        udelay(50);
-        uint8_t byte = kbd_read_data();
-        if ((status & KBDS_AUX_OBF) && ps2_mouse_is_enabled()) {
-            ps2_mouse_handle_byte(byte);
-        } else if (!(status & KBDS_AUX_OBF)) {
-            process_scancode(byte);
-        }
+        kbd_deliver_byte(status, kbd_read_data());
     }
 }
 
@@ -262,28 +273,83 @@ static bool kbd_write_controller_byte(uint8_t ccb) {
     return true;
 }
 
-static int kbd_send_device_command(uint8_t cmd) {
+/* Commands are serialized against IRQ/poll reads. ACKs must come from
+ * the addressed port; interleaved input is delivered, never mistaken for ACK. */
+static int kbd_device_command(bool aux, uint8_t cmd) {
     for (int retry = 0; retry < 3; retry++) {
         if (!kbd_wait_write(100000))
-            continue;
+            return -1;
+        if (aux) {
+            kbd_write_cmd(KBDC_WRITE_TO_AUX);
+            if (!kbd_wait_write(100000))
+                return -1;
+        }
         kbd_write_data(cmd);
-        udelay(50);
-
-        uint32_t elapsed = 0;
-        while (elapsed < 200000) {
-            if (kbd_wait_read(10000)) {
-                uint8_t resp = kbd_read_data();
-                if (resp == KBD_RESP_ACK) {
-                    return 0; /* Success */
+        for (unsigned elapsed = 0; elapsed < 200000; elapsed += 50) {
+            uint8_t status = kbd_read_status();
+            if (status != 0xFF && (status & KBDS_OBF)) {
+                uint8_t data = kbd_read_data();
+                if (!(status & (KBDS_PARITY_ERR | KBDS_TIMEOUT_ERR)) &&
+                    !!(status & KBDS_AUX_OBF) == aux) {
+                    if (data == KBD_RESP_ACK)
+                        return 0;
+                    if (data == KBD_RESP_RESEND)
+                        break;
                 }
-                if (resp == KBD_RESP_RESEND) {
-                    break;
-                }
+                kbd_deliver_byte(status, data);
             }
-            elapsed += 10000;
+            udelay(50);
         }
     }
     return -1;
+}
+
+static int kbd_send_device_command(uint8_t cmd) {
+    return kbd_device_command(false, cmd);
+}
+
+uint64_t keyboard_controller_acquire(void) {
+    uint64_t flags = kbd_irqsave();
+    spinlock_acquire(&g_i8042_lock);
+    return flags;
+}
+
+void keyboard_controller_release(uint64_t flags) {
+    spinlock_release(&g_i8042_lock);
+    kbd_irqrestore(flags);
+}
+
+bool keyboard_aux_command(uint8_t cmd) {
+    return g_i8042_present && kbd_device_command(true, cmd) == 0;
+}
+
+int keyboard_aux_read(uint32_t timeout_us) {
+    for (uint32_t elapsed = 0; elapsed < timeout_us; elapsed += 50) {
+        uint8_t status = kbd_read_status();
+        if (status != 0xFF && (status & KBDS_OBF)) {
+            uint8_t data = kbd_read_data();
+            if ((status & KBDS_AUX_OBF) && !(status & (KBDS_PARITY_ERR | KBDS_TIMEOUT_ERR)))
+                return data;
+            kbd_deliver_byte(status, data);
+        }
+        udelay(50);
+    }
+    return -1;
+}
+
+bool keyboard_configure_aux(bool irq_enabled) {
+    if (!g_i8042_present)
+        return false;
+    /* Use the negotiated byte: reading CCB while scanning can consume a
+     * key as the response. Never change XLATE behind the decoder's back. */
+    uint8_t config = g_controller_config & ~(KBD_CTR_KBDDIS | KBD_CTR_AUXDIS | KBD_CTR_AUXINT);
+    config |= KBD_CTR_KBDINT;
+    if (irq_enabled)
+        config |= KBD_CTR_AUXINT;
+    if (!kbd_write_controller_byte(config))
+        return false;
+    g_controller_config = config;
+    return true;
 }
 
 /* ==============================================================================
@@ -308,11 +374,15 @@ static void push_str_lockless(const char *str) {
 }
 
 void keyboard_push_char(char ch) {
+    uint64_t flags = kbd_irqsave();
     push_char_lockless(ch);
+    kbd_irqrestore(flags);
 }
 
 void keyboard_push_str(const char *str) {
+    uint64_t flags = kbd_irqsave();
     push_str_lockless(str);
+    kbd_irqrestore(flags);
 }
 
 uint8_t keyboard_get_modifiers(void) {
@@ -354,11 +424,10 @@ void keyboard_set_leds(bool numlock, bool capslock, bool scrolllock) {
     if (capslock)
         leds |= 0x04;
 
-    kbd_send_device_command(KBD_CMD_SET_LEDS);
-    kbd_wait_write(50000);
-    kbd_write_data(leds);
-    kbd_wait_read(50000);
-    kbd_read_data();
+    uint64_t flags = keyboard_controller_acquire();
+    if (kbd_send_device_command(KBD_CMD_SET_LEDS) == 0)
+        kbd_send_device_command(leds);
+    keyboard_controller_release(flags);
 }
 
 /* ==============================================================================
@@ -465,69 +534,49 @@ static const uint8_t g_set2_to_set1_table[256] = {
 
 static inline uint8_t set2_to_set1(uint8_t set2_code) {
     uint8_t mapped = g_set2_to_set1_table[set2_code];
-    return mapped ? mapped : set2_code;
+    return mapped;
 }
 
 /* ==============================================================================
  * Deterministic Scancode Decoder (Set 1 XT & Set 2 Native)
  * ============================================================================== */
 static void process_scancode(uint8_t scancode) {
-    /* 1. Extended Prefix 0xE0 */
-    if (scancode == 0xE0) {
-        g_extended = true;
+    if (scancode == 0xFA || scancode == 0xFE || scancode == 0xEE ||
+        scancode == 0xFC || scancode == 0xFD || scancode == 0xFF || scancode == 0)
         return;
-    }
-
-    /* 2. Pause Key Multi-Byte Prefix 0xE1 */
-    if (scancode == 0xE1) {
-        g_e1_pause_state = 2;
-        return;
-    }
+    /* Consume the entire Pause sequence, including its embedded prefixes. */
     if (g_e1_pause_state > 0) {
         g_e1_pause_state--;
         return;
     }
-
-    /* 3. Set 2 Break Code Prefix 0xF0 (Definitive Set 2 marker) */
-    if (scancode == 0xF0) {
-        g_is_set2_mode = true;
+    if (scancode == 0xE1) {
+        g_extended = false;
+        g_set2_release = false;
+        g_e1_pause_state = g_is_set2_mode ? 7 : 5;
+        return;
+    }
+    if (scancode == 0xE0) {
+        g_extended = true;
+        return;
+    }
+    if (g_is_set2_mode && scancode == 0xF0) {
         g_set2_release = true;
         return;
     }
-
-    /* 4. Handle Set 2 Translation if in Set 2 mode (or autodetect Set 2) */
     if (g_is_set2_mode) {
-        if (g_set2_release) {
-            g_set2_release = false;
-            uint8_t set1 = set2_to_set1(scancode);
-            scancode = set1 | 0x80; /* Mark as released */
-        } else {
-            scancode = set2_to_set1(scancode);
+        uint8_t mapped = set2_to_set1(scancode);
+        bool release = g_set2_release;
+        g_set2_release = false;
+        if (!mapped) {
+            g_extended = false;
+            return;
         }
-    } else {
-        /* Autodetect Set 2 make codes if XLATE was expected but controller failed to translate */
-        if (scancode == 0x5A || scancode == 0x76) {
-            g_is_set2_mode = true;
-            scancode = set2_to_set1(scancode);
-        }
+        scancode = mapped | (release ? 0x80 : 0);
     }
 
     /* 6. Extended Keys (0xE0 Prefix) */
     if (g_extended) {
         g_extended = false;
-
-        /* Convert Set 2 extended key codes if applicable */
-        if (scancode == 0x75) scancode = 0x48; /* Up */
-        else if (scancode == 0x72) scancode = 0x50; /* Down */
-        else if (scancode == 0x6B) scancode = 0x4B; /* Left */
-        else if (scancode == 0x74) scancode = 0x4D; /* Right */
-        else if (scancode == 0x6C) scancode = 0x47; /* Home */
-        else if (scancode == 0x69) scancode = 0x4F; /* End */
-        else if (scancode == 0x7D) scancode = 0x49; /* Page Up */
-        else if (scancode == 0x7A) scancode = 0x51; /* Page Down */
-        else if (scancode == 0x70) scancode = 0x52; /* Insert */
-        else if (scancode == 0x71) scancode = 0x53; /* Delete */
-        else if (scancode == 0x5A) scancode = 0x1C; /* Keypad Enter */
 
         uint16_t ext_evcode = 0;
         switch (scancode & 0x7F) {
@@ -686,37 +735,12 @@ static void process_scancode(uint8_t scancode) {
         char lower = (ch >= 'A' && ch <= 'Z') ? (char)(ch + 32) : ch;
         if (lower >= 'a' && lower <= 'z') {
             char ctrl_char = (char)(lower - 'a' + 1);
-            if (ctrl_char == 0x03) { /* Ctrl+C -> SIGINT */
-                process_t *fg = process_get_foreground();
-                if (fg)
-                    process_send_signal(fg, SIGINT);
-                push_char_lockless(0x03);
-                return;
-            } else if (ctrl_char == 0x1A) { /* Ctrl+Z -> SIGTSTP */
-                process_t *fg = process_get_foreground();
-                if (fg)
-                    process_send_signal(fg, SIGTSTP);
-                push_char_lockless(0x1A);
-                return;
-            } else if (ctrl_char == 0x1C) { /* Ctrl+\ -> SIGQUIT */
-                process_t *fg = process_get_foreground();
-                if (fg)
-                    process_send_signal(fg, SIGQUIT);
-                push_char_lockless(0x1C);
-                return;
-            } else if (ctrl_char == 0x04) { /* Ctrl+D -> EOF */
-                push_char_lockless(0x04);
-                return;
-            }
             push_char_lockless(ctrl_char);
             return;
         }
         if (ch == '[') { push_char_lockless(0x1B); return; }
         if (ch == ']') { push_char_lockless(0x1D); return; }
         if (ch == '\\') {
-            process_t *fg = process_get_foreground();
-            if (fg)
-                process_send_signal(fg, SIGQUIT);
             push_char_lockless(0x1C);
             return;
         }
@@ -735,6 +759,8 @@ void keyboard_handle_incoming_byte(uint8_t scancode) {
  * Hardware Polling Engine with Re-entrancy Protection
  * ============================================================================== */
 void keyboard_poll_hardware(void) {
+    if (!g_i8042_present)
+        return;
     uint8_t quick_status = kbd_read_status();
     if (quick_status == 0xFF || !(quick_status & KBDS_OBF)) {
         return;
@@ -745,7 +771,11 @@ void keyboard_poll_hardware(void) {
 
     for (int retry = 0; retry < 64; retry++) {
         for (volatile int d = 0; d < 10; d++) {
+#if defined(__x86_64__) || defined(_M_X64)
             __asm__ volatile("pause");
+#elif defined(__aarch64__)
+            __asm__ volatile("yield");
+#endif
         }
 
         uint8_t status = kbd_read_status();
@@ -755,14 +785,7 @@ void keyboard_poll_hardware(void) {
 
         uint8_t data = kbd_read_data();
 
-        if (status & KBDS_AUX_OBF) {
-            /* AUX/Mouse data — deliver to the mouse driver when enabled, otherwise DISCARD */
-            if (ps2_mouse_is_enabled()) {
-                ps2_mouse_handle_byte(data);
-            }
-        } else {
-            keyboard_handle_incoming_byte(data);
-        }
+        kbd_deliver_byte(status, data);
     }
 
     spinlock_release(&g_i8042_lock);
@@ -785,152 +808,83 @@ void keyboard_relax(void) {
         xhci_poll();
         ehci_poll();
     }
-    __asm__ volatile("sti; pause" ::: "memory");
-    udelay(100);
+    if (sched_get_current_thread()) {
+        thread_sleep(10);
+    } else {
+#if defined(__x86_64__) || defined(_M_X64)
+        __asm__ volatile("pause" ::: "memory");
+#elif defined(__aarch64__)
+        __asm__ volatile("yield" ::: "memory");
+#endif
+        udelay(100);
+    }
 }
 
 /* ==============================================================================
  * Fault-Tolerant, Bare-Metal & Laptop EC Proof i8042 Initialization Sequence
  * ============================================================================== */
 void keyboard_init(void) {
-    /* 1. Flush any stale data first */
-    for (int i = 0; i < 100; i++) {
-        if (inb(KBD_STATUS_PORT) & KBDS_OBF) {
-            inb(KBD_DATA_PORT);
-            io_wait();
-        }
+    uint64_t irq_flags = keyboard_controller_acquire();
+    if (kbd_read_status() == 0xFF) {
+        keyboard_controller_release(irq_flags);
+        klog_info("atkbdc: No i8042 controller detected");
+        return;
     }
-
-    /* 2. Disable both keyboard and mouse ports during setup */
-    if (kbd_wait_write(100000)) {
-        kbd_write_cmd(KBDC_DISABLE_KBD_PORT);
-    }
-    io_wait();
-    if (kbd_wait_write(100000)) {
-        kbd_write_cmd(KBDC_DISABLE_AUX_PORT);
-    }
-    io_wait();
-
-    /* 3. Flush any pending data */
-    keyboard_drain_buffers();
-
-    /* 4. Read Controller Command Byte (CCB) */
+    /* Quiesce ports while reading CCB. Avoid controller self-test: on ECs it
+     * can reset firmware state and leave delayed replies in the input stream. */
+    if (!kbd_wait_write(100000))
+        goto failed;
+    kbd_write_cmd(KBDC_DISABLE_KBD_PORT);
+    if (!kbd_wait_write(100000))
+        goto failed;
+    kbd_write_cmd(KBDC_DISABLE_AUX_PORT);
+    if (!kbd_wait_write(100000))
+        goto failed;
+    for (int i = 0; i < 128 && (kbd_read_status() & KBDS_OBF); i++)
+        (void)kbd_read_data();
     int ccb = kbd_read_controller_byte();
-    if (ccb < 0) {
-        ccb = KBD_CTR_XLATE | KBD_CTR_SYSFLAG;
-    } else {
-        /* Disable IRQs (bits 0,1), enable clocks (bits 4,5 = 0), enable translation (bit 6), system flag (bit 2) */
-        ccb &= ~(KBD_CTR_KBDINT | KBD_CTR_AUXINT | KBD_CTR_KBDDIS | KBD_CTR_AUXDIS);
-        ccb |= (KBD_CTR_XLATE | KBD_CTR_SYSFLAG);
+    if (ccb < 0)
+        goto failed;
+    ccb &= ~(KBD_CTR_KBDINT | KBD_CTR_AUXINT);
+    ccb |= KBD_CTR_KBDDIS | KBD_CTR_AUXDIS | KBD_CTR_XLATE;
+    if (!kbd_write_controller_byte((uint8_t)ccb))
+        goto failed;
+    int actual = kbd_read_controller_byte();
+    if (actual < 0)
+        goto failed;
+    g_is_set2_mode = !(actual & KBD_CTR_XLATE);
+    g_controller_config = (uint8_t)actual & ~(KBD_CTR_KBDDIS | KBD_CTR_AUXDIS);
+    if (!kbd_write_controller_byte(g_controller_config))
+        goto failed;
+    /* Select device Set 2 explicitly, regardless of whether translation works.
+     * Firmware may have left a different scan set on a warm boot. */
+    if (kbd_send_device_command(KBD_CMD_DISABLE_KBD) != 0 ||
+        kbd_send_device_command(KBD_CMD_SET_SCANCODE_SET) != 0 ||
+        kbd_send_device_command(2) != 0) {
+        klog_warn("atkbd: Scan-set negotiation incomplete; trying enable-scanning");
     }
-    kbd_write_controller_byte((uint8_t)ccb);
-    io_wait();
-
-    /* 5. Controller Self-Test (Command 0xAA) with non-fatal timeout */
-    if (kbd_wait_write(100000)) {
-        kbd_write_cmd(KBDC_SELF_TEST);
-        io_wait();
-        int timeout = 10000;
-        while (!(inb(KBD_STATUS_PORT) & KBDS_OBF) && timeout > 0) {
-            io_wait();
-            timeout--;
-        }
-        if (timeout > 0) {
-            uint8_t self_test = inb(KBD_DATA_PORT);
-            if (self_test == KBD_RESP_SELF_TEST_OK) {
-                klog_info("atkbdc: Controller self-test PASSED (0x55 OK)");
-            } else {
-                klog_warn("atkbdc: Controller self-test returned 0x%02x (continuing)", self_test);
-            }
-        }
-    }
-
-    /* Re-write CCB (some controllers reset CCB after self-test) */
-    kbd_write_controller_byte((uint8_t)ccb);
-    io_wait();
-
-    /* 6. Enable both keyboard and mouse ports */
-    if (kbd_wait_write(100000)) {
-        kbd_write_cmd(KBDC_ENABLE_KBD_PORT);
-    }
-    io_wait();
-    if (kbd_wait_write(100000)) {
-        kbd_write_cmd(KBDC_ENABLE_AUX_PORT);
-    }
-    io_wait();
-
-    /* Flush output buffer */
-    keyboard_drain_buffers();
-
-    /* 7. Reset keyboard to defaults (0xF6) */
-    kbd_send_device_command(KBD_CMD_SET_DEFAULTS);
-    for (int i = 0; i < 5000; i++) io_wait();
-    keyboard_drain_buffers();
-
-    /* 8. Enable keyboard scanning (0xF4) — VERIFY ACK. Without scanning the
-     * device generates no data at all (neither IRQ nor polling path works). */
-    if (kbd_send_device_command(KBD_CMD_ENABLE_KBD) != 0) {
-        klog_error("atkbd: keyboard did NOT ACK enable-scanning (0xF4) — keys will not be generated");
-    } else {
-        klog_info("atkbd: keyboard scanning enabled (0xF4 ACK)");
-    }
-    for (int i = 0; i < 5000; i++) io_wait();
-    keyboard_drain_buffers();
-
-    /* 9. Register Interrupt Handler in IDT */
     isr_register_handler(IRQ1, keyboard_irq_handler);
-
-    /* 10. Enable Keyboard IRQ in CCB */
-    ccb = kbd_read_controller_byte();
-    if (ccb < 0) {
-        ccb = KBD_CTR_XLATE | KBD_CTR_SYSFLAG | KBD_CTR_KBDINT;
-    } else {
-        ccb |= (KBD_CTR_KBDINT | KBD_CTR_XLATE | KBD_CTR_SYSFLAG);
-        ccb &= ~(KBD_CTR_KBDDIS | KBD_CTR_AUXDIS);
-    }
-    kbd_write_controller_byte((uint8_t)ccb);
-
-    /* Readback + verify BOTH critical bits. On real controllers (unlike QEMU)
-     * the CCB write can be silently ignored — e.g. lost after the 0xAA
-     * self-test reset or on quirky laptop ECs. */
-    int final_ccb = kbd_read_controller_byte();
-    if (final_ccb >= 0) {
-        if (!(final_ccb & KBD_CTR_KBDINT)) {
-            klog_error("atkbdc: CCB readback 0x%02x — KBDINT NOT accepted, IRQ1 will never fire (PIT polling fallback active)",
-                       (uint8_t)final_ccb);
-        }
-        if (!(final_ccb & KBD_CTR_XLATE)) {
-            g_is_set2_mode = true;
-            klog_info("atkbdc: Translation XLATE is disabled by controller (using native Set 2 mode)");
-        } else {
-            g_is_set2_mode = false;
-        }
-        klog_info("atkbdc: final CCB 0x%02x (KBDINT=%d XLATE=%d KBDIS=%d)",
-                  (uint8_t)final_ccb,
-                  !!(final_ccb & KBD_CTR_KBDINT),
-                  !!(final_ccb & KBD_CTR_XLATE),
-                  !!(final_ccb & KBD_CTR_KBDDIS));
-    } else {
-        klog_warn("atkbdc: CCB readback failed after KBDINT write");
-    }
-
-    /* 11. Unmask IRQ 1 in legacy PIC and route in IO-APIC.
-     * With the IO-APIC active the legacy PIC must stay fully masked
-     * (pic_disable did that) — unmasking here wedges the 8259 when the
-     * i8042 asserts IRQ1 (CCB KBDINT=1) with no matching EOI path. */
-    if (!ioapic_is_active()) {
-        pic_clear_mask(1);
-        pic_clear_mask(2); /* Cascade IRQ 2 */
-    }
-
-    ioapic_map_irq(1, 0x21, 0, false, false);
-
-    /* Final drain */
-    keyboard_drain_buffers();
-
     g_i8042_present = true;
-    klog_info("atkbd: Driver attached successfully (IRQ 1 active, mode: %s)",
-              g_is_set2_mode ? "Set 2 (Native)" : "Set 1 (Translated)");
+    if (!keyboard_configure_aux(false))
+        klog_warn("atkbdc: IRQ configuration failed; console polling remains active");
+    if (kbd_send_device_command(KBD_CMD_ENABLE_KBD) != 0)
+        klog_warn("atkbd: No ACK for enable-scanning");
+    if (!ioapic_is_active())
+        pic_clear_mask(1);
+    ioapic_map_irq(1, IRQ1, 0, false, false);
+    keyboard_drain_buffers();
+    keyboard_controller_release(irq_flags);
+    klog_info("atkbd: CCB=0x%02x, mode=%s, IRQ1 and console polling enabled",
+              g_controller_config, g_is_set2_mode ? "Set 2 native" : "Set 1 translated");
+    return;
+failed:
+    /* Do not leave firmware keyboard clocks disabled after a timeout. */
+    if (kbd_wait_write(100000))
+        kbd_write_cmd(KBDC_ENABLE_KBD_PORT);
+    if (kbd_wait_write(100000))
+        kbd_write_cmd(KBDC_ENABLE_AUX_PORT);
+    keyboard_controller_release(irq_flags);
+    klog_error("atkbdc: Controller setup timed out");
 }
 
 
@@ -958,17 +912,15 @@ bool keyboard_has_char(void) {
 
 char keyboard_getc(void) {
     while (!keyboard_has_char()) {
-        __asm__ volatile("sti" ::: "memory");
-        if (sched_get_current_thread() != NULL) {
-            sched_yield();
-        }
         keyboard_relax();
     }
 
+    uint64_t flags = kbd_irqsave();
     size_t r = __atomic_load_n(&g_kb_read_ptr, __ATOMIC_RELAXED);
     char ch = g_kb_buffer[r];
     size_t next_read = (r + 1) % KEYBOARD_BUFFER_SIZE;
     __atomic_store_n(&g_kb_read_ptr, next_read, __ATOMIC_RELEASE);
 
+    kbd_irqrestore(flags);
     return ch;
 }

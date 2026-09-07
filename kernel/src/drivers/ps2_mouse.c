@@ -83,62 +83,12 @@ static bool should_invert_y(void) {
     return !is_hypervisor();
 }
 
-static bool ps2_mouse_wait_write(void) {
-    int timeout = 2000;
-    while (--timeout) {
-        uint8_t status = inb(I8042_STATUS_PORT);
-        if (!(status & I8042_STATUS_IBF))
-            return true;
-        udelay(50);
-        io_wait();
-    }
-    return false;
-}
-
-static bool ps2_mouse_wait_read(void) {
-    int timeout = 2000;
-    while (--timeout) {
-        uint8_t status = inb(I8042_STATUS_PORT);
-        if (status != 0xFF && (status & I8042_STATUS_OBF))
-            return true;
-        udelay(50);
-        io_wait();
-    }
-    return false;
-}
-
-static void ps2_mouse_write(uint8_t data) {
-    if (!ps2_mouse_wait_write())
-        return;
-    outb(I8042_COMMAND_PORT, I8042_CMD_WRITE_AUX);
-    io_wait();
-    udelay(50);
-    if (!ps2_mouse_wait_write())
-        return;
-    outb(I8042_DATA_PORT, data);
-    io_wait();
-    udelay(50);
-}
-
-static uint8_t ps2_mouse_read(void) {
-    if (!ps2_mouse_wait_read())
-        return 0xFF;
-    return inb(I8042_DATA_PORT);
-}
-
 static bool ps2_mouse_send_cmd(uint8_t cmd) {
-    for (int retry = 0; retry < 2; retry++) {
-        ps2_mouse_write(cmd);
-        uint8_t resp = ps2_mouse_read();
-        if (resp == MOUSE_RESP_ACK)
-            return true;
-    }
-    return false;
+    return keyboard_aux_command(cmd);
 }
 
-static void ps2_mouse_set_sample_rate(uint8_t rate) {
-    ps2_mouse_send_cmd(MOUSE_CMD_SET_SAMPLE);
-    ps2_mouse_send_cmd(rate);
+static bool ps2_mouse_set_sample_rate(uint8_t rate) {
+    return ps2_mouse_send_cmd(MOUSE_CMD_SET_SAMPLE) && ps2_mouse_send_cmd(rate);
 }
 
 static void mouse_enqueue_packet(const mouse_packet_t *pkt) {
@@ -224,144 +174,53 @@ static void mouse_irq_handler(interrupt_frame_t *frame) {
 
 void ps2_mouse_init(void) {
     spinlock_init(&g_mouse_lock);
-
-    uint8_t status = inb(I8042_STATUS_PORT);
-    if (status == 0xFF) {
-        g_mouse_initialized = false;
-        return;
-    }
-
-    /* 1. Enable AUX Port Clock (Command 0xA8) */
-    if (ps2_mouse_wait_write()) {
-        outb(I8042_COMMAND_PORT, I8042_CMD_ENABLE_AUX);
-        io_wait();
-    }
-    udelay(10000);
-
-    /* 2. Read and update controller configuration byte (Enable IRQ 12 & IRQ 1) */
-    uint8_t config = 0x47;
-    if (ps2_mouse_wait_write()) {
-        outb(I8042_COMMAND_PORT, I8042_CMD_READ_CONFIG);
-        io_wait();
-        if (ps2_mouse_wait_read()) {
-            config = inb(I8042_DATA_PORT);
-        }
-    }
-
-    /* Bit 0: Enable KB IRQ 1, Bit 1: Enable AUX IRQ 12, Bit 4: Enable KB Clock, Bit 5: Enable AUX Clock, Bit 6: KB Translation */
-    config |= (1 << 0) | (1 << 1) | (1 << 6);
-    config &= ~((1 << 4) | (1 << 5));
-
-    if (ps2_mouse_wait_write()) {
-        outb(I8042_COMMAND_PORT, I8042_CMD_WRITE_CONFIG);
-        io_wait();
-        udelay(50);
-        if (ps2_mouse_wait_write()) {
-            outb(I8042_DATA_PORT, config);
-            io_wait();
-        }
-    }
-
-    /* 3. Send Reset to Pointing Device (Command 0xFF via 0xD4) */
-    int reset_res = ps2_mouse_send_cmd(MOUSE_CMD_RESET);
-    if (reset_res < 0) {
-        /* No mouse responded to reset */
+    uint64_t flags = keyboard_controller_acquire();
+    g_mouse_initialized = false;
+    g_packet_idx = 0;
+    if (!keyboard_configure_aux(false))
         goto no_mouse;
-    }
-    uint8_t bat = 0;
-    for (int t = 0; t < 50; t++) {
-        if (ps2_mouse_wait_read()) {
-            bat = inb(I8042_DATA_PORT);
-            if (bat == 0xAA)
-                break;
-        }
-        udelay(10000);
-    }
-    if (bat != 0xAA) {
+    /* bool must be tested for false; the previous '< 0' never detected
+     * failed reset and then consumed keyboard input as mouse replies. */
+    if (!ps2_mouse_send_cmd(MOUSE_CMD_RESET))
         goto no_mouse;
+    if (keyboard_aux_read(500000) != MOUSE_RESP_BAT_OK)
+        goto no_mouse;
+    int dev_id = keyboard_aux_read(100000);
+    if (dev_id < 0)
+        goto no_mouse;
+    g_has_wheel = false;
+    if (ps2_mouse_set_sample_rate(200) && ps2_mouse_set_sample_rate(100) &&
+        ps2_mouse_set_sample_rate(80) && ps2_mouse_send_cmd(MOUSE_CMD_GET_ID)) {
+        int id = keyboard_aux_read(100000);
+        g_has_wheel = id == 3 || id == 4;
     }
-    uint8_t dev_id = ps2_mouse_read();
-
-    /* 5. Probe for IntelliMouse 3D Scroll Wheel (Sample rates: 200 -> 100 -> 80) */
-    ps2_mouse_set_sample_rate(200);
-    ps2_mouse_set_sample_rate(100);
-    ps2_mouse_set_sample_rate(80);
-
-    ps2_mouse_send_cmd(MOUSE_CMD_GET_ID);
-    uint8_t mouse_id = ps2_mouse_read();
-    if (mouse_id == 3 || mouse_id == 4) {
-        g_has_wheel = true;
-        klog_info("PS/2 Mouse: IntelliMouse with scroll wheel detected (ID %d)", mouse_id);
-    } else {
-        g_has_wheel = false;
-        klog_info("PS/2 Mouse: Standard PS/2 mouse detected (ID %d)", dev_id != 0xFF ? dev_id : 0);
-    }
-
-    /* 6. Set default sample rate & enable streaming */
-    ps2_mouse_set_sample_rate(100);
-    ps2_mouse_send_cmd(MOUSE_CMD_SET_RES);
-    ps2_mouse_send_cmd(3); /* 8 counts/mm */
-    ps2_mouse_send_cmd(MOUSE_CMD_ENABLE_DATA);
-
-    /* 7. Register Interrupt Handler & Route IRQ 12 */
+    if (!ps2_mouse_set_sample_rate(100) || !ps2_mouse_send_cmd(MOUSE_CMD_SET_RES) ||
+        !ps2_mouse_send_cmd(3))
+        goto no_mouse;
     isr_register_handler(IRQ12, mouse_irq_handler);
-    if (!ioapic_is_active()) {
-        pic_clear_mask(2);  /* Unmask Master PIC Cascade IRQ 2 */
-        pic_clear_mask(12); /* Unmask Slave PIC Mouse IRQ 12 */
+    if (!ps2_mouse_send_cmd(MOUSE_CMD_ENABLE_DATA))
+        goto no_mouse;
+    g_mouse_initialized = true;
+    if (!keyboard_configure_aux(true)) {
+        g_mouse_initialized = false;
+        goto no_mouse;
     }
-    ioapic_map_irq(12, 0x2C, 0, false, false);
-
+    if (!ioapic_is_active()) {
+        pic_clear_mask(2);
+        pic_clear_mask(12);
+    }
+    ioapic_map_irq(12, IRQ12, 0, false, false);
+    keyboard_controller_release(flags);
     sysctl_register("hw.ps2_mouse.invert_y", CTLTYPE_INT, CTLFLAG_RW, &g_ps2_invert_y, sizeof(int), NULL,
                     "Invert PS/2 Mouse Y Axis (-1=Auto, 0=Off, 1=On)");
-
-    g_mouse_initialized = true;
-    klog_info("PS/2 Mouse: Driver initialized successfully (IRQ 12 active, Y-invert: %s)",
-              should_invert_y() ? "ON [Bare-Metal]" : "OFF [Hypervisor/QEMU]");
+    klog_info("PS/2 Mouse: initialized (wheel=%d); keyboard translation preserved", g_has_wheel);
     return;
 
 no_mouse:
-    /*
-     * Dell Latitude / Laptop EC safety rule:
-     * Never send 0xA7 (Disable AUX Port) or set Bit 5 (AUX Clock Disable) in CCB!
-     * On Dell Latitudes and laptops with multiplexed ECs, disabling AUX clock
-     * shuts down the shared scan matrix clock for the keyboard.
-     */
-    config = 0x47;
-    if (ps2_mouse_wait_write()) {
-        outb(I8042_COMMAND_PORT, I8042_CMD_READ_CONFIG);
-        io_wait();
-        if (ps2_mouse_wait_read()) {
-            config = inb(I8042_DATA_PORT);
-        }
-    }
-
-    /* Enable KBD IRQ 1, Keep both KBD and AUX clocks active, Enable Translation */
-    config |= (1 << 0) | (1 << 6);
-    config &= ~((1 << 4) | (1 << 5)); /* Ensure both clocks remain ENABLED */
-
-    if (ps2_mouse_wait_write()) {
-        outb(I8042_COMMAND_PORT, I8042_CMD_WRITE_CONFIG);
-        io_wait();
-        udelay(50);
-        if (ps2_mouse_wait_write()) {
-            outb(I8042_DATA_PORT, config);
-            io_wait();
-        }
-    }
-
-    /* Ensure Keyboard Port (0xAE) remains enabled */
-    if (ps2_mouse_wait_write()) {
-        outb(I8042_COMMAND_PORT, 0xAE);
-        io_wait();
-    }
-
-    if (!ioapic_is_active()) {
-        pic_clear_mask(1);
-    }
-    g_mouse_initialized = false;
-    keyboard_drain_buffers();
-
-    klog_info("PS/2 Mouse: No PS/2 mouse detected on AUX port (Controller left in safe dual-clock mode)");
+    /* Keep both clocks running, mask only AUX IRQ, preserve negotiated XLATE. */
+    keyboard_configure_aux(false);
+    keyboard_controller_release(flags);
+    klog_info("PS/2 Mouse: absent or unresponsive; keyboard configuration preserved");
 }
 
 bool ps2_mouse_is_enabled(void) {

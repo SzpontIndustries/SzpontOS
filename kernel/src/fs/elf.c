@@ -22,6 +22,8 @@ static void user_thread_trampoline(void) {
 }
 
 static void elf_write_user_mem(pagemap_t *map, uintptr_t vaddr, const void *src, size_t len) {
+    if (!vmm_user_range(vaddr, len))
+        return;
     size_t written = 0;
     while (written < len) {
         uintptr_t cur_vaddr = vaddr + written;
@@ -49,6 +51,10 @@ static void elf_write_user_mem(pagemap_t *map, uintptr_t vaddr, const void *src,
 }
 
 static void elf_read_user_mem(pagemap_t *map, uintptr_t vaddr, void *dst, size_t len) {
+    if (!vmm_user_range(vaddr, len)) {
+        memset(dst, 0, len);
+        return;
+    }
     size_t read_bytes = 0;
     while (read_bytes < len) {
         uintptr_t cur_vaddr = vaddr + read_bytes;
@@ -105,6 +111,12 @@ static int elf_load_segments(vfs_node_t *file, pagemap_t *map, uintptr_t base_va
             continue;
 
         uintptr_t seg_vaddr = base_vaddr + p->p_vaddr;
+        if (seg_vaddr < base_vaddr || !vmm_user_range(seg_vaddr, p->p_memsz) ||
+            p->p_filesz > p->p_memsz || p->p_offset > file->length ||
+            p->p_filesz > file->length - p->p_offset) {
+            kfree(phdrs);
+            return -1;
+        }
         uintptr_t vaddr_start = ALIGN_DOWN(seg_vaddr, PAGE_SIZE);
         uintptr_t vaddr_end = ALIGN_UP(seg_vaddr + p->p_memsz, PAGE_SIZE);
         size_t page_count = (vaddr_end - vaddr_start) / PAGE_SIZE;
@@ -130,7 +142,11 @@ static int elf_load_segments(vfs_node_t *file, pagemap_t *map, uintptr_t base_va
                     return -1;
                 }
                 memset(PHYS_TO_VIRT(ppage), 0, PAGE_SIZE);
-                vmm_map_page(map, vpage, ppage, vmm_flags);
+                if (!vmm_map_page(map, vpage, ppage, vmm_flags)) {
+                    pmm_free_page(ppage);
+                    kfree(phdrs);
+                    return -1;
+                }
             }
 
             void *kptr = PHYS_TO_VIRT(ppage);
@@ -347,6 +363,8 @@ static uintptr_t elf_resolve_symbol(const char *name, elf_loaded_so_t *so_list, 
 }
 
 static inline void elf_write_u64_cached(pagemap_t *map, uintptr_t vaddr, uint64_t val, uintptr_t *last_vpage, uint8_t **last_kptr) {
+    if (!vmm_user_range(vaddr, sizeof(val)))
+        return;
     uintptr_t page_vaddr = ALIGN_DOWN(vaddr, PAGE_SIZE);
     size_t page_off = vaddr - page_vaddr;
     if (page_off + sizeof(uint64_t) <= PAGE_SIZE) {

@@ -11,7 +11,7 @@
 void *mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
     int64_t ret = __syscall6(SYS_mmap, (int64_t)addr, (int64_t)length, prot, flags, fd, offset);
     if (ret < 0 || (void *)ret == (void *)-1) {
-        errno = ENOMEM;
+        errno = (int)-ret;
         return MAP_FAILED;
     }
     return (void *)ret;

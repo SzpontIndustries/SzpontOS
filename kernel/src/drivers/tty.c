@@ -91,13 +91,6 @@ static char tty_get_raw_key(void) {
         if (serial_received()) {
             return serial_getc();
         }
-        /* Enable interrupts while waiting so IRQ1 and timer can wake the CPU */
-        __asm__ volatile("sti" ::: "memory");
-
-        /* Yield CPU to allow other threads and idle thread to run */
-        if (sched_get_current_thread() != NULL) {
-            sched_yield();
-        }
         keyboard_relax();
     }
 }

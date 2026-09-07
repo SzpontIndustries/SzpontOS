@@ -10,6 +10,9 @@
 #define VMM_FLAG_WRITE_COMBINING (1ULL << 3) /* PA1 in configured PAT MSR */
 #define VMM_FLAG_CACHE_DISABLE (1ULL << 4)
 #define VMM_FLAG_NO_EXECUTE (1ULL << 63)
+/* Software flag: the frame belongs to a device or shared-memory object. */
+#define VMM_FLAG_BORROWED (1ULL << 9)
+#define VMM_USER_END 0x0000800000000000ULL
 
 #define VMM_PAGE_SIZE 4096UL
 #define PHYS_ADDR_MASK 0x000FFFFFFFFFF000ULL
@@ -42,5 +45,8 @@ uintptr_t vmm_user_page_phys(pagemap_t *map, uintptr_t virt, bool write);
 bool vmm_alloc_user_page(pagemap_t *map, uintptr_t virt, uint64_t flags);
 pagemap_t *vmm_clone_address_space(pagemap_t *src);
 bool vmm_set_range_flags(pagemap_t *map, uintptr_t virt, size_t size, uint64_t flags);
+bool vmm_user_range(uintptr_t addr, size_t size);
+bool vmm_user_access(pagemap_t *map, uintptr_t addr, size_t size, bool write);
+bool vmm_release_user_page(pagemap_t *map, uintptr_t virt);
 
 #endif /* SZPONTOS_MM_VMM_H */

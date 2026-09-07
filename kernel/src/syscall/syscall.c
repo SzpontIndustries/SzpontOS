@@ -160,9 +160,29 @@ static inline bool get_user_string(char *dst, const char *src, size_t max_len) {
     return copy_string_from_user(dst, (uintptr_t)src, max_len) >= 0;
 }
 
+/* Validate all pages, including permissions at every paging level. */
+static bool user_buffer(const void *buf, size_t count, bool write) {
+    process_t *proc = sched_get_current_process();
+    return proc && vmm_user_access(proc->pagemap, (uintptr_t)buf, count, write);
+}
+
+static uint64_t user_protection(int prot) {
+    /* PROT_NONE retains the frame as a supervisor-only leaf, so protection
+     * can be restored and munmap/fork can still find its physical owner. */
+    uint64_t flags = prot ? VMM_FLAG_USER : 0;
+    if (prot & 2)
+        flags |= VMM_FLAG_WRITABLE;
+    if (!(prot & 4))
+        flags |= VMM_FLAG_NO_EXECUTE;
+    return flags;
+}
+
 static int64_t sys_read(int fd, void *buf, size_t count) {
-    if (!buf || count == 0)
+    if (count == 0)
         return 0;
+
+    if (!user_buffer(buf, count, true))
+        return -14; /* EFAULT */
 
     process_t *proc = sched_get_current_process();
     if (!proc || fd < 0 || fd >= MAX_FD)
@@ -231,8 +251,11 @@ static int64_t sys_read(int fd, void *buf, size_t count) {
 }
 
 static int64_t sys_write(int fd, const void *buf, size_t count) {
-    if (!buf || count == 0)
+    if (count == 0)
         return 0;
+
+    if (!user_buffer(buf, count, false))
+        return -14; /* EFAULT */
 
     process_t *proc = sched_get_current_process();
     if (!proc || fd < 0 || fd >= MAX_FD)
@@ -1382,8 +1405,9 @@ static int64_t sys_clone(uint64_t flags, uintptr_t child_stack, uintptr_t ptid, 
         return -1;
 
     thread_t *child_t = (thread_t *)kzalloc(sizeof(thread_t));
-    if (!child_t)
-        return -1;
+    if (!child_t) {
+        return -12;
+    }
 
     static tid_t s_clone_tid = 100;
     child_t->tid = s_clone_tid++;
@@ -1421,7 +1445,7 @@ static int64_t sys_clone(uint64_t flags, uintptr_t child_stack, uintptr_t ptid, 
     uintptr_t stack_phys = pmm_alloc_pages(stack_pages);
     if (!stack_phys) {
         kfree(child_t);
-        return -1;
+        return -12;
     }
 
     child_t->kernel_stack_bottom = (uintptr_t)PHYS_TO_VIRT(stack_phys);
@@ -1494,25 +1518,24 @@ static int64_t sys_fork(void) {
         pagemap_t *old_pagemap = child->pagemap;
         child->pagemap = vmm_clone_address_space(parent->pagemap);
         vmm_destroy_address_space(old_pagemap);
-    }
-
-    /* Clone open file descriptors */
-    for (int i = 0; i < MAX_FD; i++) {
-        if (parent->fds[i]) {
-            child->fds[i] = parent->fds[i];
-            parent->fds[i]->refcount++;
-            child->fd_cloexec[i] = parent->fd_cloexec[i];
+        if (!child->pagemap) {
+            process_destroy_unstarted(child);
+            return -12;
         }
     }
 
     /* Allocate and initialize child thread */
     thread_t *parent_t = sched_get_current_thread();
-    if (!parent_t)
+    if (!parent_t) {
+        process_destroy_unstarted(child);
         return -1;
+    }
 
     thread_t *child_t = (thread_t *)kzalloc(sizeof(thread_t));
-    if (!child_t)
-        return -1;
+    if (!child_t) {
+        process_destroy_unstarted(child);
+        return -12;
+    }
 
     static tid_t s_fork_tid = 100;
     child_t->tid = s_fork_tid++;
@@ -1528,11 +1551,26 @@ static int64_t sys_fork(void) {
     uintptr_t stack_phys = pmm_alloc_pages(stack_pages);
     if (!stack_phys) {
         kfree(child_t);
-        return -1;
+        process_destroy_unstarted(child);
+        return -12;
     }
 
     child_t->kernel_stack_bottom = (uintptr_t)PHYS_TO_VIRT(stack_phys);
     child_t->kernel_stack_top = child_t->kernel_stack_bottom + 16 * 1024;
+
+    /* Replace the default streams only after all fallible allocations. */
+    for (int i = 0; i < 3; i++) {
+        kfree(child->fds[i]);
+        child->fds[i] = NULL;
+    }
+    /* Clone open file descriptors */
+    for (int i = 0; i < MAX_FD; i++) {
+        if (parent->fds[i]) {
+            child->fds[i] = parent->fds[i];
+            parent->fds[i]->refcount++;
+            child->fd_cloexec[i] = parent->fd_cloexec[i];
+        }
+    }
 
     /* Copy user context frame from parent's top of kernel stack */
     uint64_t *sp = (uint64_t *)child_t->kernel_stack_top;
@@ -1761,8 +1799,13 @@ static int64_t sys_unlink(const char *pathname) {
 }
 
 static int64_t sys_pread64(int fd, void *buf, size_t count, off_t offset) {
-    if (!buf || count == 0 || offset < 0)
+    if (count == 0)
         return 0;
+    if (offset < 0)
+        return -22;
+    if (!user_buffer(buf, count, true))
+        return -14; /* EFAULT */
+
     process_t *proc = sched_get_current_process();
     if (!proc || fd < 0 || fd >= MAX_FD || !proc->fds[fd] || !proc->fds[fd]->node)
         return -1;
@@ -1773,8 +1816,13 @@ static int64_t sys_pread64(int fd, void *buf, size_t count, off_t offset) {
 }
 
 static int64_t sys_pwrite64(int fd, const void *buf, size_t count, off_t offset) {
-    if (!buf || count == 0 || offset < 0)
+    if (count == 0)
         return 0;
+    if (offset < 0)
+        return -22;
+    if (!user_buffer(buf, count, false))
+        return -14; /* EFAULT */
+
     process_t *proc = sched_get_current_process();
     if (!proc || fd < 0 || fd >= MAX_FD || !proc->fds[fd] || !proc->fds[fd]->node)
         return -1;
@@ -1790,11 +1838,15 @@ struct iovec_k {
 };
 
 static int64_t sys_readv(int fd, const struct iovec_k *iov, int iovcnt) {
-    if (!iov || iovcnt <= 0)
+    if (iovcnt < 0 || iovcnt > 1024)
+        return -22;
+    if (iovcnt == 0)
         return 0;
+    if (!user_buffer(iov, (size_t)iovcnt * sizeof(*iov), false))
+        return -14;
     int64_t total = 0;
     for (int i = 0; i < iovcnt; i++) {
-        if (!iov[i].iov_base || iov[i].iov_len == 0)
+        if (iov[i].iov_len == 0)
             continue;
         int64_t r = sys_read(fd, iov[i].iov_base, iov[i].iov_len);
         if (r < 0)
@@ -1807,11 +1859,15 @@ static int64_t sys_readv(int fd, const struct iovec_k *iov, int iovcnt) {
 }
 
 static int64_t sys_writev(int fd, const struct iovec_k *iov, int iovcnt) {
-    if (!iov || iovcnt <= 0)
+    if (iovcnt < 0 || iovcnt > 1024)
+        return -22;
+    if (iovcnt == 0)
         return 0;
+    if (!user_buffer(iov, (size_t)iovcnt * sizeof(*iov), false))
+        return -14;
     int64_t total = 0;
     for (int i = 0; i < iovcnt; i++) {
-        if (!iov[i].iov_base || iov[i].iov_len == 0)
+        if (iov[i].iov_len == 0)
             continue;
         int64_t r = sys_write(fd, iov[i].iov_base, iov[i].iov_len);
         if (r < 0)
@@ -1825,47 +1881,12 @@ static int64_t sys_writev(int fd, const struct iovec_k *iov, int iovcnt) {
 
 static int64_t sys_mprotect(void *addr, size_t len, int prot) {
     process_t *proc = sched_get_current_process();
-    if (!proc || !addr || len == 0)
-        return -22; /* -EINVAL */
-
-    /* POSIX: addr must be a multiple of the page size */
-    if ((uintptr_t)addr & (PAGE_SIZE - 1))
-        return -22; /* -EINVAL */
-
-    /* Check for integer overflow and canonical userspace boundary */
-    uintptr_t start = (uintptr_t)addr;
-    if (start + len < start || (start + len) > USER_ADDR_MAX)
-        return -12; /* -ENOMEM */
-
-    uintptr_t end = ALIGN_UP(start + len, PAGE_SIZE);
-
-    /* POSIX: If any part of the address range is not mapped, fail with ENOMEM */
-    for (uintptr_t p = start; p < end; p += PAGE_SIZE) {
-        if (vmm_virt_to_phys(proc->pagemap, p) == 0) {
-            return -12; /* -ENOMEM */
-        }
-    }
-
-    /* Compute page table flags */
-    uint64_t flags = 0;
-    if (prot != 0) { /* Not PROT_NONE */
-        flags = VMM_FLAG_PRESENT | VMM_FLAG_USER;
-        if (prot & 2) /* PROT_WRITE */
-            flags |= VMM_FLAG_WRITABLE;
-        if (!(prot & 4)) /* PROT_EXEC not set -> NX bit */
-            flags |= VMM_FLAG_NO_EXECUTE;
-    }
-
-    for (uintptr_t p = start; p < end; p += PAGE_SIZE) {
-        uintptr_t phys = vmm_virt_to_phys(proc->pagemap, p) & PHYS_ADDR_MASK;
-        if (flags == 0) {
-            /* PROT_NONE: unmap page entry so access triggers page fault */
-            vmm_unmap_page(proc->pagemap, p);
-        } else {
-            vmm_map_page(proc->pagemap, p, phys, flags);
-        }
-    }
-    return 0;
+    if (!proc || ((uintptr_t)addr & (PAGE_SIZE - 1)) ||
+        (prot & ~7) || !vmm_user_range((uintptr_t)addr, len))
+        return -22;
+    if (len == 0)
+        return 0;
+    return vmm_set_range_flags(proc->pagemap, (uintptr_t)addr, len, user_protection(prot)) ? 0 : -12;
 }
 
 struct tms_k {
@@ -2089,95 +2110,103 @@ static int64_t sys_ioctl(int fd, unsigned long request, void *argp) {
 }
 
 static void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
-    (void)prot;
-    (void)flags;
     process_t *proc = sched_get_current_process();
-    if (!proc || length == 0)
-        return (void *)-1;
-
-    /* Check if file descriptor has custom device mmap handler (e.g. /dev/dri/card0) */
-    if (fd >= 0 && fd < MAX_FD && proc->fds[fd] && proc->fds[fd]->node) {
-        vfs_node_t *node = proc->fds[fd]->node;
-        if (node->ops && node->ops->mmap) {
-            void *out_vaddr = NULL;
-            if (node->ops->mmap(node, addr, length, prot, flags, offset, &out_vaddr) == 0) {
-                return out_vaddr;
-            }
-            return (void *)-1;
-        }
-    }
-
-    if (proc->mmap_current == 0) {
-        proc->mmap_current = 0x0000600000000000ULL;
-    }
-
-    size_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    bool fixed = flags & 0x10; /* MAP_FIXED */
+    bool anonymous = flags & 0x20;
+    if (!proc || length == 0 || length > VMM_USER_END - PAGE_SIZE ||
+        (prot & ~7) || ((flags & 3) != 1 && (flags & 3) != 2) ||
+        offset < 0 || ((uintptr_t)offset & (PAGE_SIZE - 1)))
+        return (void *)-22;
+    size_t span = ALIGN_UP(length, PAGE_SIZE);
     uintptr_t vaddr = (uintptr_t)addr;
-    if (vaddr == 0) {
+    if ((fixed && (vaddr & (PAGE_SIZE - 1))) ||
+        (vaddr && !vmm_user_range(vaddr, span)) || (fixed && !vaddr))
+        return (void *)-22;
+    vaddr = ALIGN_DOWN(vaddr, PAGE_SIZE);
+
+    vfs_node_t *node = NULL;
+    if (!anonymous) {
+        if (fd < 0 || fd >= MAX_FD || !proc->fds[fd] || !proc->fds[fd]->node)
+            return (void *)-9;
+        node = proc->fds[fd]->node;
+        if (!node->ops || (!node->ops->read && !node->ops->mmap))
+            return (void *)-19;
+    }
+    if (!proc->mmap_current)
+        proc->mmap_current = 0x0000600000000000ULL;
+    if (!vaddr)
         vaddr = proc->mmap_current;
-        proc->mmap_current += pages * PAGE_SIZE;
+    /* A non-fixed address is a hint: never overwrite an existing mapping. */
+    if (!fixed) {
+        for (;;) {
+            if (!vmm_user_range(vaddr, span))
+                return (void *)-12;
+            bool available = true;
+            for (size_t off = 0; off < span; off += PAGE_SIZE) {
+                if (vmm_virt_to_phys(proc->pagemap, vaddr + off)) {
+                    vaddr += off + PAGE_SIZE;
+                    available = false;
+                    break;
+                }
+            }
+            if (available)
+                break;
+        }
+    }
+    if (!vmm_user_range(vaddr, span))
+        return (void *)-12;
+
+    if (node && node->ops->mmap) {
+        void *out = NULL;
+        int result = node->ops->mmap(node, (void *)vaddr, length, prot, flags, offset, &out);
+        if (result < 0)
+            return (void *)(intptr_t)result;
+        if (!vmm_set_range_flags(proc->pagemap, (uintptr_t)out, span, user_protection(prot)))
+            return (void *)-12;
+        if (vaddr + span > proc->mmap_current)
+            proc->mmap_current = vaddr + span;
+        return out;
     }
 
-    for (size_t i = 0; i < pages; i++) {
+    size_t mapped = 0;
+    for (; mapped < span; mapped += PAGE_SIZE) {
         uintptr_t phys = pmm_alloc_page();
-        if (!phys) {
-            /* Roll back pages already allocated/mapped for this request. */
-            for (size_t j = 0; j < i; j++) {
-                uintptr_t jvirt = vaddr + j * PAGE_SIZE;
-                uintptr_t jphys = vmm_virt_to_phys(proc->pagemap, jvirt);
-                vmm_unmap_page(proc->pagemap, jvirt);
-                if (jphys)
-                    pmm_free_page(jphys);
-            }
-            return (void *)-1;
-        }
+        if (!phys)
+            goto fail;
         memset(PHYS_TO_VIRT(phys), 0, PAGE_SIZE);
-        vmm_map_page(proc->pagemap, vaddr + i * PAGE_SIZE, phys, VMM_FLAG_WRITABLE | VMM_FLAG_USER);
-    }
-
-    /* If file-backed mapping, read data from file into physical pages */
-    if (fd >= 0 && fd < MAX_FD && proc->fds[fd] && proc->fds[fd]->node) {
-        vfs_node_t *node = proc->fds[fd]->node;
-        if (node->ops && node->ops->read) {
-            size_t bytes_left = length;
-            if (node->length > (size_t)offset) {
-                size_t avail = node->length - (size_t)offset;
-                if (bytes_left > avail)
-                    bytes_left = avail;
-            } else {
-                bytes_left = 0;
-            }
-
-            off_t cur_offset = offset;
-            for (size_t i = 0; i < pages && bytes_left > 0; i++) {
-                uintptr_t virt = vaddr + i * PAGE_SIZE;
-                uintptr_t phys = vmm_virt_to_phys(proc->pagemap, virt);
-                if (!phys)
-                    break;
-                void *page_buf = (void *)PHYS_TO_VIRT(phys);
-                size_t chunk = (bytes_left > PAGE_SIZE) ? PAGE_SIZE : bytes_left;
-                ssize_t read_bytes = node->ops->read(node, cur_offset, chunk, page_buf);
-                if (read_bytes <= 0)
-                    break;
-                bytes_left -= read_bytes;
-                cur_offset += read_bytes;
+        if (node && (size_t)offset < node->length && mapped < node->length - (size_t)offset) {
+            size_t count = MIN(PAGE_SIZE, length - mapped);
+            count = MIN(count, node->length - (size_t)offset - mapped);
+            ssize_t n = node->ops->read(node, offset + mapped, count, PHYS_TO_VIRT(phys));
+            if (n < 0) {
+                pmm_free_page(phys);
+                goto fail;
             }
         }
+        if (fixed)
+            vmm_release_user_page(proc->pagemap, vaddr + mapped);
+        if (!vmm_map_page(proc->pagemap, vaddr + mapped, phys, user_protection(prot))) {
+            pmm_free_page(phys);
+            goto fail;
+        }
     }
-
+    if (vaddr + span > proc->mmap_current)
+        proc->mmap_current = vaddr + span;
     return (void *)vaddr;
+fail:
+    for (size_t off = 0; off < mapped; off += PAGE_SIZE)
+        vmm_release_user_page(proc->pagemap, vaddr + off);
+    return (void *)-12;
 }
 
 static int sys_munmap(void *addr, size_t length) {
     process_t *proc = sched_get_current_process();
-    if (!proc || !addr || length == 0)
-        return -1;
-
-    size_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
-    uintptr_t vaddr = (uintptr_t)addr;
-    for (size_t i = 0; i < pages; i++) {
-        vmm_unmap_page(proc->pagemap, vaddr + i * PAGE_SIZE);
-    }
+    if (!proc || !length || ((uintptr_t)addr & (PAGE_SIZE - 1)) ||
+        !vmm_user_range((uintptr_t)addr, length))
+        return -22;
+    size_t span = ALIGN_UP(length, PAGE_SIZE);
+    for (size_t off = 0; off < span; off += PAGE_SIZE)
+        vmm_release_user_page(proc->pagemap, (uintptr_t)addr + off);
     return 0;
 }
 

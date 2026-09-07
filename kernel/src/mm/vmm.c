@@ -52,7 +52,8 @@ static page_table_t *get_next_level(page_table_t *current, size_t index, bool al
 }
 
 bool vmm_map_page(pagemap_t *map, uintptr_t virt, uintptr_t phys, uint64_t flags) {
-    if (!map || !map->pml4_virt)
+    if (!map || !map->pml4_virt ||
+        (map != &g_kernel_pagemap && !vmm_user_range(virt, PAGE_SIZE)))
         return false;
 
     virt = ALIGN_DOWN(virt, PAGE_SIZE);
@@ -61,19 +62,19 @@ bool vmm_map_page(pagemap_t *map, uintptr_t virt, uintptr_t phys, uint64_t flags
     spinlock_acquire(&g_vmm_lock);
 
     page_table_t *pml4 = map->pml4_virt;
-    page_table_t *pdpt = get_next_level(pml4, pml4_index(virt), true, flags & VMM_FLAG_USER);
+    page_table_t *pdpt = get_next_level(pml4, pml4_index(virt), true, map != &g_kernel_pagemap ? VMM_FLAG_USER : (flags & VMM_FLAG_USER));
     if (!pdpt) {
         spinlock_release(&g_vmm_lock);
         return false;
     }
 
-    page_table_t *pd = get_next_level(pdpt, pdpt_index(virt), true, flags & VMM_FLAG_USER);
+    page_table_t *pd = get_next_level(pdpt, pdpt_index(virt), true, map != &g_kernel_pagemap ? VMM_FLAG_USER : (flags & VMM_FLAG_USER));
     if (!pd) {
         spinlock_release(&g_vmm_lock);
         return false;
     }
 
-    page_table_t *pt = get_next_level(pd, pd_index(virt), true, flags & VMM_FLAG_USER);
+    page_table_t *pt = get_next_level(pd, pd_index(virt), true, map != &g_kernel_pagemap ? VMM_FLAG_USER : (flags & VMM_FLAG_USER));
     if (!pt) {
         spinlock_release(&g_vmm_lock);
         return false;
@@ -87,7 +88,8 @@ bool vmm_map_page(pagemap_t *map, uintptr_t virt, uintptr_t phys, uint64_t flags
 }
 
 bool vmm_unmap_page(pagemap_t *map, uintptr_t virt) {
-    if (!map || !map->pml4_virt)
+    if (!map || !map->pml4_virt ||
+        (map != &g_kernel_pagemap && !vmm_user_range(virt, PAGE_SIZE)))
         return false;
 
     virt = ALIGN_DOWN(virt, PAGE_SIZE);
@@ -196,7 +198,11 @@ bool vmm_alloc_user_page(pagemap_t *map, uintptr_t virt, uint64_t flags) {
     void *ptr = PHYS_TO_VIRT(phys);
     memset(ptr, 0, PAGE_SIZE);
 
-    return vmm_map_page(map, virt, phys, flags | VMM_FLAG_USER | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE);
+    if (!vmm_map_page(map, virt, phys, flags | VMM_FLAG_USER | VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE)) {
+        pmm_free_page(phys);
+        return false;
+    }
+    return true;
 }
 
 pagemap_t *vmm_create_address_space(void) {
@@ -248,7 +254,8 @@ void vmm_destroy_address_space(pagemap_t *map) {
                             for (size_t l = 0; l < 512; l++) {
                                 if (pt->entries[l] & VMM_FLAG_PRESENT) {
                                     uintptr_t page_phys = pt->entries[l] & PHYS_ADDR_MASK;
-                                    pmm_free_page(page_phys);
+                                    if (!(pt->entries[l] & VMM_FLAG_BORROWED))
+                                        pmm_free_page(page_phys);
                                 }
                             }
                             pmm_free_page(pt_phys);
@@ -300,15 +307,21 @@ pagemap_t *vmm_clone_address_space(pagemap_t *src) {
                                     uintptr_t virt = ((uintptr_t)i << 39) | ((uintptr_t)j << 30) |
                                                      ((uintptr_t)k << 21) | ((uintptr_t)l << 12);
                                     uintptr_t src_phys = pt->entries[l] & PHYS_ADDR_MASK;
-                                    uint64_t flags = pt->entries[l] & 0xFFF;
+                                    uint64_t flags = pt->entries[l] & ~PHYS_ADDR_MASK;
+                                    /* fork currently copies user pages eagerly, including
+                                     * borrowed mappings: the new frame is owned by dst. */
+                                    flags &= ~VMM_FLAG_BORROWED;
 
                                     uintptr_t dst_phys = pmm_alloc_page();
                                     if (!dst_phys) {
                                         klog_error("VMM: Out of physical memory while cloning address space (fork)!");
-                                        continue;
+                                        goto fail;
                                     }
                                     memcpy(PHYS_TO_VIRT(dst_phys), PHYS_TO_VIRT(src_phys), PAGE_SIZE);
-                                    vmm_map_page(dst, virt, dst_phys, flags);
+                                    if (!vmm_map_page(dst, virt, dst_phys, flags)) {
+                                        pmm_free_page(dst_phys);
+                                        goto fail;
+                                    }
                                 }
                             }
                         }
@@ -319,39 +332,113 @@ pagemap_t *vmm_clone_address_space(pagemap_t *src) {
     }
 
     return dst;
+fail:
+    vmm_destroy_address_space(dst);
+    return NULL;
+}
+
+/* Caller holds g_vmm_lock. User mappings use 4 KiB leaves. */
+static uint64_t *user_leaf(pagemap_t *map, uintptr_t virt) {
+    page_table_t *table = map->pml4_virt;
+    for (int shift = 39; shift > 12; shift -= 9) {
+        uint64_t entry = table->entries[(virt >> shift) & 511];
+        if (!(entry & VMM_FLAG_PRESENT) || (entry & (1ULL << 7)))
+            return NULL;
+        table = PHYS_TO_VIRT(entry & PHYS_ADDR_MASK);
+    }
+    return &table->entries[pt_index(virt)];
+}
+
+bool vmm_user_range(uintptr_t addr, size_t size) {
+    return addr >= PAGE_SIZE && addr < VMM_USER_END && size <= VMM_USER_END - addr;
+}
+
+bool vmm_user_access(pagemap_t *map, uintptr_t addr, size_t size, bool write) {
+    if (size == 0)
+        return true;
+    if (!map || !map->pml4_virt || !vmm_user_range(addr, size))
+        return false;
+    bool ok = true;
+    uint64_t required = VMM_FLAG_PRESENT | VMM_FLAG_USER;
+    if (write)
+        required |= VMM_FLAG_WRITABLE;
+    spinlock_acquire(&g_vmm_lock);
+    uintptr_t end = addr + size;
+    for (uintptr_t v = ALIGN_DOWN(addr, PAGE_SIZE); v < end; v += PAGE_SIZE) {
+        page_table_t *table = map->pml4_virt;
+        for (int shift = 39; shift >= 12; shift -= 9) {
+            uint64_t entry = table->entries[(v >> shift) & 511];
+            if ((entry & required) != required || (shift > 12 && (entry & (1ULL << 7)))) {
+                ok = false;
+                goto done;
+            }
+            if (shift > 12)
+                table = PHYS_TO_VIRT(entry & PHYS_ADDR_MASK);
+        }
+    }
+done:
+    spinlock_release(&g_vmm_lock);
+    return ok;
+}
+
+bool vmm_release_user_page(pagemap_t *map, uintptr_t virt) {
+    if (!map || map == &g_kernel_pagemap || !vmm_user_range(virt, PAGE_SIZE))
+        return false;
+    spinlock_acquire(&g_vmm_lock);
+    uint64_t *entry = user_leaf(map, virt);
+    if (entry && (*entry & VMM_FLAG_PRESENT)) {
+        uint64_t old = *entry;
+        *entry = 0;
+        invlpg(virt);
+        if (!(old & VMM_FLAG_BORROWED))
+            pmm_free_page(old & PHYS_ADDR_MASK);
+        /* Reclaim empty intermediate tables as well, otherwise repeated
+         * mmap(NULL)/munmap leaks one PT per 2 MiB of virtual addresses. */
+        page_table_t *tables[4] = {map->pml4_virt};
+        size_t indices[4] = {pml4_index(virt), pdpt_index(virt), pd_index(virt), pt_index(virt)};
+        for (int level = 0; level < 3; level++)
+            tables[level + 1] = PHYS_TO_VIRT(tables[level]->entries[indices[level]] & PHYS_ADDR_MASK);
+        for (int level = 3; level > 0; level--) {
+            bool empty = true;
+            for (size_t i = 0; i < 512; i++) {
+                if (tables[level]->entries[i]) {
+                    empty = false;
+                    break;
+                }
+            }
+            if (!empty)
+                break;
+            uint64_t *parent = &tables[level - 1]->entries[indices[level - 1]];
+            uintptr_t phys = *parent & PHYS_ADDR_MASK;
+            *parent = 0;
+            pmm_free_page(phys);
+        }
+    }
+    spinlock_release(&g_vmm_lock);
+    return true;
 }
 
 bool vmm_set_range_flags(pagemap_t *map, uintptr_t virt, size_t size, uint64_t flags) {
-    if (!map || !map->pml4_virt || size == 0)
+    if (!map || !map->pml4_virt || size == 0 || !vmm_user_range(virt, size))
         return false;
-
     uintptr_t start = ALIGN_DOWN(virt, PAGE_SIZE);
     uintptr_t end = ALIGN_UP(virt + size, PAGE_SIZE);
-
     spinlock_acquire(&g_vmm_lock);
-
+    /* Validate the whole range before changing any protection. */
     for (uintptr_t v = start; v < end; v += PAGE_SIZE) {
-        page_table_t *pml4 = map->pml4_virt;
-        page_table_t *pdpt = get_next_level(pml4, pml4_index(v), false, 0);
-        if (!pdpt)
-            continue;
-
-        page_table_t *pd = get_next_level(pdpt, pdpt_index(v), false, 0);
-        if (!pd)
-            continue;
-
-        page_table_t *pt = get_next_level(pd, pd_index(v), false, 0);
-        if (!pt)
-            continue;
-
-        uint64_t entry = pt->entries[pt_index(v)];
-        if (entry & VMM_FLAG_PRESENT) {
-            uintptr_t phys = entry & PHYS_ADDR_MASK;
-            pt->entries[pt_index(v)] = phys | flags | VMM_FLAG_PRESENT;
-            invlpg(v);
+        uint64_t *entry = user_leaf(map, v);
+        if (!entry || !(*entry & VMM_FLAG_PRESENT)) {
+            spinlock_release(&g_vmm_lock);
+            return false;
         }
     }
-
+    for (uintptr_t v = start; v < end; v += PAGE_SIZE) {
+        uint64_t *entry = user_leaf(map, v);
+        uint64_t preserve = PHYS_ADDR_MASK | VMM_FLAG_BORROWED |
+                            VMM_FLAG_WRITE_THROUGH | VMM_FLAG_CACHE_DISABLE | (1ULL << 7);
+        *entry = (*entry & preserve) | flags | VMM_FLAG_PRESENT;
+        invlpg(v);
+    }
     spinlock_release(&g_vmm_lock);
     return true;
 }
