@@ -13,16 +13,16 @@ skeleton:
 	@if [ -d $(ROOTFS_SKELETON_DIR) ]; then cp -r $(ROOTFS_SKELETON_DIR)/* $(ROOTFS_DIR)/ 2>/dev/null || true; fi
 
 init: skeleton
-	@$(MAKE) -C $(ROOT_DIR)/userland/init
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/userland/init
 
 sh: skeleton
-	@$(MAKE) -C $(ROOT_DIR)/userland/sh
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/userland/sh
 
 lib: skeleton
-	@$(MAKE) -C $(ROOT_DIR)/userland/lib
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/userland/lib
 
 bin: skeleton
-	@$(MAKE) -C $(ROOT_DIR)/userland/bin
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/userland/bin
 
 xserver: skeleton
-	@$(MAKE) -C $(ROOT_DIR)/userland/xserver
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/userland/xserver

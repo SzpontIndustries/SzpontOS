@@ -8,9 +8,11 @@ extern thread_exit
 
 section .text
 
-; void arch_switch_context(uintptr_t *old_rsp_ptr, uintptr_t new_rsp)
+; void arch_switch_context(uintptr_t *old_rsp_ptr, uintptr_t new_rsp, void *old_fpu, const void *new_fpu)
 ; RDI: old_rsp_ptr
 ; RSI: new_rsp
+; RDX: old_fpu (512 bytes aligned 16)
+; RCX: new_fpu (512 bytes aligned 16)
 arch_switch_context:
     ; Save callee-saved registers of old thread
     push rbx
@@ -21,11 +23,23 @@ arch_switch_context:
     push r15
     pushfq
 
+    ; Save FPU/SSE state if old_fpu is provided
+    test rdx, rdx
+    jz .no_save_fpu
+    fxsave64 [rdx]
+.no_save_fpu:
+
     ; Save current RSP into *old_rsp_ptr
     mov [rdi], rsp
 
     ; Load new RSP
     mov rsp, rsi
+
+    ; Restore FPU/SSE state if new_fpu is provided
+    test rcx, rcx
+    jz .no_restore_fpu
+    fxrstor64 [rcx]
+.no_restore_fpu:
 
     ; Restore callee-saved registers of new thread
     popfq

@@ -31,7 +31,7 @@ ALL_ROOTFS_SOS := \
 # ==============================================================================
 # GNU Ncurses (Cross-compiled via original Autotools)
 # ==============================================================================
-$(NCURSES_BUILD_DIR)/Makefile: $(SYSROOT_STAMP) | $(NCURSES_BUILD_DIR)
+$(NCURSES_BUILD_DIR)/Makefile: third_party/ncurses/configure | $(SYSROOT_STAMP) $(NCURSES_BUILD_DIR)
 	@echo "  [CONF-NCURSES] Konfiguracja GNU Ncurses (Autotools cross-compile)..."
 	@cd $(NCURSES_BUILD_DIR) && \
 	../../../third_party/ncurses/configure \
@@ -83,8 +83,8 @@ $(LIBNCURSES_A): $(NCURSES_BUILD_DIR)/Makefile $(LIBC_A) $(CRT0_O)
 	@python3 scripts/generate_ncurses_fallbacks.py $(NCURSES_BUILD_DIR)/ncurses/fallback.c
 	@sed -i '' 's/mkdir $$@/mkdir -p $$@/g' $(NCURSES_BUILD_DIR)/ncurses/Makefile 2>/dev/null || sed -i 's/mkdir $$@/mkdir -p $$@/g' $(NCURSES_BUILD_DIR)/ncurses/Makefile 2>/dev/null || true
 	@echo "  [MAKE-NCURSES] Kompilacja GNU Ncurses..."
-	@$(MAKE) -C $(NCURSES_BUILD_DIR)/include
-	@$(MAKE) -C $(NCURSES_BUILD_DIR)/ncurses
+	@$(MAKE) -j$(JOBS) -C $(NCURSES_BUILD_DIR)/include
+	@$(MAKE) -j$(JOBS) -C $(NCURSES_BUILD_DIR)/ncurses
 	@mkdir -p $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include $(ROOTFS_DIR)/lib
 	@cp $(NCURSES_BUILD_DIR)/lib/libncurses.a $(SYSROOT_DIR)/usr/lib/
 	@cp $(NCURSES_BUILD_DIR)/lib/libncurses.a $(ROOTFS_DIR)/lib/
@@ -121,7 +121,7 @@ third_party/file/configure:
 	@echo "  [PRECONF-FILE] Generowanie configure dla GNU file..."
 	@cd third_party/file && autoreconf -fi || true
 
-$(FILE_BUILD_DIR)/Makefile: third_party/file/configure $(SYSROOT_STAMP) | $(FILE_BUILD_DIR)
+$(FILE_BUILD_DIR)/Makefile: third_party/file/configure | $(SYSROOT_STAMP) $(FILE_BUILD_DIR)
 	@echo "  [CONF-FILE] Konfiguracja GNU file (Autotools cross-compile)..."
 	@cd $(FILE_BUILD_DIR) && \
 	../../../third_party/file/configure \
@@ -154,7 +154,7 @@ $(FILE_BUILD_DIR):
 $(ROOTFS_DIR)/bin/file: $(FILE_BUILD_DIR)/Makefile $(LIBC_A) $(CRT0_O) $(LIBM_A) | $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(ROOTFS_DIR)/lib
 	@echo "  [MAKE-FILE] Kompilacja GNU file za pomocą oryginalnego Makefile..."
-	@$(MAKE) -C $(FILE_BUILD_DIR)/src file_LDADD="$(abspath $(SYSROOT_DIR))/usr/lib/crt0.o libmagic.la -lm"
+	@$(MAKE) -j$(JOBS) -C $(FILE_BUILD_DIR)/src file_LDADD="$(abspath $(SYSROOT_DIR))/usr/lib/crt0.o libmagic.la -lm"
 	@cp $(FILE_BUILD_DIR)/src/file $@
 	@cp $(FILE_BUILD_DIR)/src/.libs/libmagic.a $(ROOTFS_DIR)/lib/ 2>/dev/null || true
 
@@ -173,7 +173,7 @@ third_party/zsh/configure:
 	@mkdir -p third_party/zsh/Doc && touch third_party/zsh/Doc/help.txt
 	@cd third_party/zsh && (./Util/preconfig || (autoconf && autoheader && echo > stamp-h.in))
 
-$(ZSH_BUILD_DIR)/Makefile: third_party/zsh/configure $(LIBNCURSES_A) $(SYSROOT_STAMP) | $(ZSH_BUILD_DIR)
+$(ZSH_BUILD_DIR)/Makefile: third_party/zsh/configure | $(LIBNCURSES_A) $(SYSROOT_STAMP) $(ZSH_BUILD_DIR)
 	@echo "  [CONF-ZSH] Konfiguracja Zsh (Autotools cross-compile)..."
 	@cd $(ZSH_BUILD_DIR) && \
 	../../../third_party/zsh/configure \
@@ -200,13 +200,13 @@ $(ZSH_BUILD_DIR):
 $(ROOTFS_DIR)/bin/zsh: $(ZSH_BUILD_DIR)/Makefile $(LIBNCURSES_A) $(LIBC_A) $(CRT0_O) $(LIBM_A) | $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin
 	@echo "  [MAKE-ZSH] Kompilacja powłoki Zsh..."
-	@$(MAKE) -C $(ZSH_BUILD_DIR)/Src zsh
+	@$(MAKE) -j$(JOBS) -C $(ZSH_BUILD_DIR)/Src zsh
 	@cp $(ZSH_BUILD_DIR)/Src/zsh $@
 
 # ==============================================================================
 # Fastfetch (CMake cross-compile)
 # ==============================================================================
-$(FASTFETCH_BUILD_DIR)/Makefile: $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) | $(FASTFETCH_BUILD_DIR)
+$(FASTFETCH_BUILD_DIR)/Makefile: third_party/fastfetch/CMakeLists.txt | $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(FASTFETCH_BUILD_DIR)
 	@echo "  [CONF-FASTFETCH] Konfiguracja Fastfetch (CMake cross-compile)..."
 	@cd $(FASTFETCH_BUILD_DIR) && \
 	cmake ../../../third_party/fastfetch \
@@ -246,10 +246,10 @@ $(FASTFETCH_BUILD_DIR)/Makefile: $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) 
 $(FASTFETCH_BUILD_DIR):
 	@mkdir -p $@
 
-$(ROOTFS_DIR)/bin/fastfetch: $(FASTFETCH_BUILD_DIR)/Makefile $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) | $(ROOTFS_DIR)
+$(ROOTFS_DIR)/bin/fastfetch: $(FASTFETCH_BUILD_DIR)/Makefile | $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin
 	@echo "  [MAKE-FASTFETCH] Kompilacja narzędzia Fastfetch..."
-	@$(MAKE) -C $(FASTFETCH_BUILD_DIR) fastfetch
+	@$(MAKE) -j$(JOBS) -C $(FASTFETCH_BUILD_DIR) fastfetch
 	@cp $(FASTFETCH_BUILD_DIR)/fastfetch $@
 
 # ==============================================================================
@@ -261,7 +261,7 @@ ZLIB_OBJS := $(patsubst third_party/zlib/%.c,$(ZLIB_BUILD_DIR)/%.o,$(ZLIB_SRCS))
 $(ZLIB_BUILD_DIR):
 	@mkdir -p $@
 
-$(ZLIB_BUILD_DIR)/%.o: third_party/zlib/%.c $(SYSROOT_STAMP) | $(ZLIB_BUILD_DIR)
+$(ZLIB_BUILD_DIR)/%.o: third_party/zlib/%.c | $(SYSROOT_STAMP) $(ZLIB_BUILD_DIR)
 	@echo "  [CC-ZLIB] $<"
 	@$(CC) $(USER_CFLAGS) -DZ_HAVE_UNISTD_H=1 -DHAVE_UNISTD_H=1 -Ithird_party/zlib -c $< -o $@
 
@@ -275,11 +275,11 @@ $(LIBZ_A): $(ZLIB_OBJS)
 # ==============================================================================
 # Git (Libre-WD-40 cross-compile with OpenSSL & cURL)
 # ==============================================================================
-$(ROOTFS_DIR)/bin/git: $(LIBZ_A) $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(OPENSSL_STAMP) $(ROOTFS_DIR)/bin/curl $(ROOTFS_DIR)/etc/ssl/cert.pem | $(ROOTFS_DIR)
+$(ROOTFS_DIR)/bin/git: $(LIBZ_A) $(OPENSSL_STAMP) $(ROOTFS_DIR)/bin/curl $(ROOTFS_DIR)/etc/ssl/cert.pem | $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(ROOTFS_DIR)/usr/libexec/git-core $(SYSROOT_DIR)/usr/libexec/git-core
 	@echo "  [MAKE-GIT] Kompilacja narzędzia Git z obsługą cURL i OpenSSL..."
 	@cp userland/config/git/config.mak third_party/git/config.mak
-	@$(MAKE) -C third_party/git \
+	@$(MAKE) -j$(JOBS) -C third_party/git \
 	    CC="$(CC)" \
 	    AR="$(AR)" \
 	    RANLIB="$(RANLIB)" \
@@ -299,18 +299,17 @@ $(ROOTFS_DIR)/bin/git: $(LIBZ_A) $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) 
 	@cp -f $(ROOTFS_DIR)/bin/git-remote-http $(ROOTFS_DIR)/bin/git-remote-ftps
 	@cp -f $(ROOTFS_DIR)/bin/git-remote-http $(ROOTFS_DIR)/usr/libexec/git-core/git-remote-https
 	@cp -f $(ROOTFS_DIR)/bin/git-remote-http $(ROOTFS_DIR)/usr/libexec/git-core/git-remote-ftp
-	@cp -f $(ROOTFS_DIR)/bin/git-remote-http $(ROOTFS_DIR)/usr/libexec/git-core/git-remote-ftps
 	@rm -f third_party/git/config.mak
 
 # ==============================================================================
 # X11 Headers and Protocol Specifications (xorgproto & xtrans)
 # ==============================================================================
-$(SYSROOT_DIR)/usr/include/X11/X.h: $(SYSROOT_STAMP)
+$(SYSROOT_DIR)/usr/include/X11/X.h: | $(SYSROOT_STAMP)
 
 # ==============================================================================
 # libXau Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libXau.so: $(SYSROOT_STAMP) $(wildcard third_party/libXau/*.c) $(wildcard third_party/libXau/include/*.h)
+$(ROOTFS_DIR)/lib/libXau.so: $(wildcard third_party/libXau/*.c) $(wildcard third_party/libXau/include/*.h) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libXau $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib
 	@echo "  [MAKE-LIBXAU] Kompilacja libXau..."
 	@cd $(BUILD_DIR)/third_party/libXau && \
@@ -329,7 +328,7 @@ $(ROOTFS_DIR)/lib/libXau.so: $(SYSROOT_STAMP) $(wildcard third_party/libXau/*.c)
 # ==============================================================================
 # libXdmcp Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libXdmcp.so: $(SYSROOT_STAMP) $(wildcard third_party/libXdmcp/*.c) $(wildcard third_party/libXdmcp/include/X11/*.h)
+$(ROOTFS_DIR)/lib/libXdmcp.so: $(wildcard third_party/libXdmcp/*.c) $(wildcard third_party/libXdmcp/include/X11/*.h) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libXdmcp $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib
 	@echo "  [MAKE-LIBXDMCP] Kompilacja libXdmcp..."
 	@cd $(BUILD_DIR)/third_party/libXdmcp && \
@@ -364,7 +363,7 @@ $(ROOTFS_DIR)/lib/libxcb.so: third_party/libxcb/configure $(ROOTFS_DIR)/lib/libX
 	            LDFLAGS="-nostdlib -L$(abspath $(SYSROOT_DIR))/usr/lib -B$(abspath $(SYSROOT_DIR))/usr/lib"; \
 	    fi && \
 	    export PYTHONPATH="$(abspath third_party/xcb-proto)" && \
-	    $(MAKE) -C src XCBPROTO_XCBINCLUDEDIR="$(abspath $(SYSROOT_DIR))/usr/share/xcb" && \
+	    $(MAKE) -j$(JOBS) -C src XCBPROTO_XCBINCLUDEDIR="$(abspath $(SYSROOT_DIR))/usr/share/xcb" && \
 	    cp -f src/*.h $(abspath $(SYSROOT_DIR))/usr/include/xcb/ && \
 	    cd src && \
 	    $(LD) -shared -soname libxcb.so.1 -o $(abspath $(SYSROOT_DIR))/usr/lib/libxcb.so.1 *.o -L$(abspath $(SYSROOT_DIR))/usr/lib -lXau -lXdmcp -lc && \
@@ -405,8 +404,8 @@ $(ROOTFS_DIR)/lib/libX11.so: third_party/libX11/configure $(ROOTFS_DIR)/lib/libx
 	            CFLAGS="-fPIC -O2 -ffreestanding -fno-builtin -D_POSIX_THREAD_SAFE_FUNCTIONS=1 -isystem $(abspath $(SYSROOT_DIR))/usr/include -B$(abspath $(SYSROOT_DIR))/usr/lib" \
 	            LDFLAGS="-nostdlib -L$(abspath $(SYSROOT_DIR))/usr/lib -B$(abspath $(SYSROOT_DIR))/usr/lib"; \
 	    fi && \
-	    $(MAKE) -C modules && \
-	    $(MAKE) -C src && \
+	    $(MAKE) -j$(JOBS) -C modules && \
+	    $(MAKE) -j$(JOBS) -C src && \
 	    $(LD) -shared -soname libX11.so.6 -o $(abspath $(SYSROOT_DIR))/usr/lib/libX11.so.6 --whole-archive src/.libs/libX11.a --no-whole-archive -L$(abspath $(SYSROOT_DIR))/usr/lib -lxcb -lXau -lXdmcp -lc && \
 	    cp -f $(abspath $(SYSROOT_DIR))/usr/lib/libX11.so.6 $(abspath $(SYSROOT_DIR))/usr/lib/libX11.so && \
 	    cp -f $(abspath $(SYSROOT_DIR))/usr/lib/libX11.so.6 $(abspath $(ROOTFS_DIR))/lib/libX11.so.6 && \
@@ -418,14 +417,14 @@ $(ROOTFS_DIR)/lib/libX11.so: third_party/libX11/configure $(ROOTFS_DIR)/lib/libx
 # ==============================================================================
 # libxkbfile Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libxkbfile.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so $(wildcard third_party/libxkbfile/src/*.c)
+$(ROOTFS_DIR)/lib/libxkbfile.so: $(ROOTFS_DIR)/lib/libX11.so $(wildcard third_party/libxkbfile/src/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libxkbfile $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/X11/extensions
 	@echo "  [MAKE-LIBXKBFILE] Kompilacja libxkbfile..."
 	@cd $(BUILD_DIR)/third_party/libxkbfile && \
 	    touch config.h && \
 	    rm -f *.o && \
 	    for src in $(abspath third_party/libxkbfile)/src/*.c; do \
-	        $(CC) -fPIC -O2 -ffreestanding -fno-builtin -DHAVE_CONFIG_H -DHAVE_STRCASECMP=1 -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath third_party/libxkbfile)/include -I$(abspath third_party/libxkbfile)/include/X11/extensions -I$(abspath third_party/libxkbfile)/src -I$(abspath $(BUILD_DIR)/third_party/libxkbfile) -c "$$src" -o "$$(basename $$src .c).o" || exit 1; \
+	        $(CC) -fPIC -O2 -ffreestanding -fno-builtin -DHAVE_CONFIG_H -DHAVE_STRCASECMP=1 -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath third_party/libxkbfile/include) -I$(abspath third_party/libxkbfile/include/X11/extensions) -I$(abspath third_party/libxkbfile)/src -I$(abspath $(BUILD_DIR)/third_party/libxkbfile) -c "$$src" -o "$$(basename $$src .c).o" || exit 1; \
 	    done && \
 	    $(LD) -shared -soname libxkbfile.so.1 -o $(abspath $(SYSROOT_DIR))/usr/lib/libxkbfile.so.1 *.o -L$(abspath $(SYSROOT_DIR))/usr/lib -lX11 -lc && \
 	    cp -f $(abspath $(SYSROOT_DIR))/usr/lib/libxkbfile.so.1 $(abspath $(SYSROOT_DIR))/usr/lib/libxkbfile.so && \
@@ -436,7 +435,7 @@ $(ROOTFS_DIR)/lib/libxkbfile.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so $(
 # ==============================================================================
 # libfontenc Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libfontenc.so: $(SYSROOT_STAMP) $(LIBZ_A) $(wildcard third_party/libfontenc/src/*.c)
+$(ROOTFS_DIR)/lib/libfontenc.so: $(LIBZ_A) $(wildcard third_party/libfontenc/src/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libfontenc $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/X11/fonts
 	@echo "  [MAKE-LIBFONTENC] Kompilacja libfontenc..."
 	@cd $(BUILD_DIR)/third_party/libfontenc && \
@@ -461,7 +460,7 @@ third_party/libXfont2/configure: third_party/libXfont2/configure.ac
 	@mkdir -p third_party/libXfont2/m4
 	@cd third_party/libXfont2 && autoreconf -fi -I ../util-macros -I ../xtrans -I ../font-util -I /opt/homebrew/share/aclocal 2>/dev/null || true
 
-$(ROOTFS_DIR)/lib/libXfont2.so: third_party/libXfont2/configure $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libfontenc.so $(LIBZ_A)
+$(ROOTFS_DIR)/lib/libXfont2.so: third_party/libXfont2/configure $(ROOTFS_DIR)/lib/libfontenc.so $(LIBZ_A) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libXfont2 $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib
 	@echo "  [MAKE-LIBXFONT2] Kompilacja libXfont2..."
 	@cd $(BUILD_DIR)/third_party/libXfont2 && \
@@ -475,8 +474,8 @@ $(ROOTFS_DIR)/lib/libXfont2.so: third_party/libXfont2/configure $(SYSROOT_STAMP)
 	            LDFLAGS="-nostdlib -L$(abspath $(SYSROOT_DIR))/usr/lib -B$(abspath $(SYSROOT_DIR))/usr/lib -lc" \
 	            LIBS="-L$(abspath $(SYSROOT_DIR))/usr/lib -lfontenc -lz -lc"; \
 	    fi && \
-	    $(MAKE) && \
-	    $(MAKE) install DESTDIR="$(abspath $(SYSROOT_DIR))" && \
+	    $(MAKE) -j$(JOBS) && \
+	    $(MAKE) -j$(JOBS) install DESTDIR="$(abspath $(SYSROOT_DIR))" && \
 	    rm -f $(abspath $(SYSROOT_DIR))/usr/lib/*.la && \
 	    $(LD) -shared -soname libXfont2.so.2 -o $(abspath $(SYSROOT_DIR))/usr/lib/libXfont2.so.2 --whole-archive .libs/libXfont2.a --no-whole-archive -L$(abspath $(SYSROOT_DIR))/usr/lib -lfontenc -lz -lc && \
 	    cp -f $(abspath $(SYSROOT_DIR))/usr/lib/libXfont2.so.2 $(abspath $(SYSROOT_DIR))/usr/lib/libXfont2.so && \
@@ -486,7 +485,7 @@ $(ROOTFS_DIR)/lib/libXfont2.so: third_party/libXfont2/configure $(SYSROOT_STAMP)
 # ==============================================================================
 # libxcvt Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libxcvt.so: $(SYSROOT_STAMP) $(wildcard third_party/libxcvt/lib/*.c)
+$(ROOTFS_DIR)/lib/libxcvt.so: $(wildcard third_party/libxcvt/lib/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libxcvt $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/libxcvt
 	@echo "  [MAKE-LIBXCVT] Kompilacja libxcvt..."
 	@$(CC) -fPIC -O2 -ffreestanding -fno-builtin -isystem $(abspath $(SYSROOT_DIR))/usr/include -Ithird_party/libxcvt/include -Ithird_party/libxcvt/lib -c third_party/libxcvt/lib/libxcvt.c -o $(BUILD_DIR)/third_party/libxcvt/libxcvt.o
@@ -498,7 +497,7 @@ $(ROOTFS_DIR)/lib/libxcvt.so: $(SYSROOT_STAMP) $(wildcard third_party/libxcvt/li
 # ==============================================================================
 # libpciaccess Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libpciaccess.so: $(SYSROOT_STAMP) $(wildcard third_party/libpciaccess/src/*.c)
+$(ROOTFS_DIR)/lib/libpciaccess.so: $(wildcard third_party/libpciaccess/src/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libpciaccess $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include
 	@echo "  [MAKE-LIBPCIACCESS] Kompilacja libpciaccess..."
 	@cd $(BUILD_DIR)/third_party/libpciaccess && \
@@ -515,7 +514,7 @@ $(ROOTFS_DIR)/lib/libpciaccess.so: $(SYSROOT_STAMP) $(wildcard third_party/libpc
 # ==============================================================================
 # libpixman-1 Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libpixman-1.so: $(SYSROOT_STAMP) $(LIBM_SO) $(wildcard third_party/pixman/pixman/*.c)
+$(ROOTFS_DIR)/lib/libpixman-1.so: $(LIBM_SO) $(wildcard third_party/pixman/pixman/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/pixman $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/pixman-1
 	@echo "  [MAKE-PIXMAN] Kompilacja pixman..."
 	@cd $(BUILD_DIR)/third_party/pixman && \
@@ -543,7 +542,7 @@ $(ROOTFS_DIR)/lib/libpixman-1.so: $(SYSROOT_STAMP) $(LIBM_SO) $(wildcard third_p
 # ==============================================================================
 # libdrm Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libdrm.so: $(LIBC_A) $(SYSROOT_STAMP) | $(ROOTFS_DIR)
+$(ROOTFS_DIR)/lib/libdrm.so: $(BUILD_DIR)/libc/src/drm/drm.o | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/lib/pkgconfig $(SYSROOT_DIR)/usr/include/libdrm
 	@echo "  [LD-LIBDRM] $@"
 	@$(LD) -shared -soname libdrm.so.2 -o $(SYSROOT_DIR)/usr/lib/libdrm.so $(BUILD_DIR)/libc/src/drm/drm.o -L$(abspath $(SYSROOT_DIR))/usr/lib -lc
@@ -556,7 +555,7 @@ $(ROOTFS_DIR)/lib/libdrm.so: $(LIBC_A) $(SYSROOT_STAMP) | $(ROOTFS_DIR)
 # ==============================================================================
 # libICE Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libICE.so: $(SYSROOT_STAMP) $(LIBC_SO) $(wildcard third_party/libICE/src/*.c)
+$(ROOTFS_DIR)/lib/libICE.so: $(wildcard third_party/libICE/src/*.c) | $(LIBC_SO) $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libICE $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/X11/ICE
 	@echo "  [MAKE-LIBICE] Kompilacja libICE..."
 	@cd $(BUILD_DIR)/third_party/libICE && \
@@ -573,7 +572,7 @@ $(ROOTFS_DIR)/lib/libICE.so: $(SYSROOT_STAMP) $(LIBC_SO) $(wildcard third_party/
 # ==============================================================================
 # libSM Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libSM.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libICE.so $(wildcard third_party/libSM/src/*.c)
+$(ROOTFS_DIR)/lib/libSM.so: $(ROOTFS_DIR)/lib/libICE.so $(wildcard third_party/libSM/src/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libSM $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/X11/SM
 	@echo "  [MAKE-LIBSM] Kompilacja libSM..."
 	@cd $(BUILD_DIR)/third_party/libSM && \
@@ -590,7 +589,7 @@ $(ROOTFS_DIR)/lib/libSM.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libICE.so $(wildc
 # ==============================================================================
 # libXpm Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libXpm.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so $(wildcard third_party/libXpm/src/*.c)
+$(ROOTFS_DIR)/lib/libXpm.so: $(ROOTFS_DIR)/lib/libX11.so $(wildcard third_party/libXpm/src/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libXpm $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/X11
 	@echo "  [MAKE-LIBXPM] Kompilacja libXpm..."
 	@cd $(BUILD_DIR)/third_party/libXpm && \
@@ -609,7 +608,7 @@ $(ROOTFS_DIR)/lib/libXpm.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so $(wild
 # ==============================================================================
 # libXext Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libXext.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so $(wildcard third_party/libXext/src/*.c)
+$(ROOTFS_DIR)/lib/libXext.so: $(ROOTFS_DIR)/lib/libX11.so $(wildcard third_party/libXext/src/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libXext $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/X11/extensions
 	@echo "  [MAKE-LIBXEXT] Kompilacja libXext..."
 	@cd $(BUILD_DIR)/third_party/libXext && \
@@ -628,7 +627,7 @@ $(ROOTFS_DIR)/lib/libXext.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so $(wil
 # ==============================================================================
 # libXt Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libXt.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so $(ROOTFS_DIR)/lib/libSM.so $(ROOTFS_DIR)/lib/libICE.so $(wildcard third_party/libXt/src/*.c)
+$(ROOTFS_DIR)/lib/libXt.so: $(ROOTFS_DIR)/lib/libX11.so $(ROOTFS_DIR)/lib/libSM.so $(ROOTFS_DIR)/lib/libICE.so $(wildcard third_party/libXt/src/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libXt $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/X11
 	@echo "  [MAKE-LIBXT] Kompilacja libXt..."
 	@clang third_party/libXt/util/makestrs.c -o $(BUILD_DIR)/third_party/libXt/makestrs
@@ -648,7 +647,7 @@ $(ROOTFS_DIR)/lib/libXt.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so $(ROOTF
 # ==============================================================================
 # libXmu Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libXmu.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libXt.so $(ROOTFS_DIR)/lib/libXext.so $(wildcard third_party/libXmu/src/*.c)
+$(ROOTFS_DIR)/lib/libXmu.so: $(ROOTFS_DIR)/lib/libXt.so $(ROOTFS_DIR)/lib/libXext.so $(wildcard third_party/libXmu/src/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libXmu $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/X11/Xmu
 	@echo "  [MAKE-LIBXMU] Kompilacja libXmu..."
 	@cd $(BUILD_DIR)/third_party/libXmu && \
@@ -665,7 +664,7 @@ $(ROOTFS_DIR)/lib/libXmu.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libXt.so $(ROOTF
 # ==============================================================================
 # libXaw Target
 # ==============================================================================
-$(ROOTFS_DIR)/lib/libXaw.so: $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libXmu.so $(ROOTFS_DIR)/lib/libXpm.so $(wildcard third_party/libXaw/src/*.c)
+$(ROOTFS_DIR)/lib/libXaw.so: $(ROOTFS_DIR)/lib/libXmu.so $(ROOTFS_DIR)/lib/libXpm.so $(wildcard third_party/libXaw/src/*.c) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)/third_party/libXaw $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/X11/Xaw
 	@echo "  [MAKE-LIBXAW] Kompilacja libXaw..."
 	@cd $(BUILD_DIR)/third_party/libXaw && \
@@ -694,7 +693,7 @@ $(ROOTFS_DIR)/bin/xterm: $(ROOTFS_DIR)/lib/libXaw.so $(ROOTFS_DIR)/lib/libXmu.so
 	        LDFLAGS="-L$(abspath $(ROOTFS_DIR))/lib -L$(abspath $(SYSROOT_DIR))/usr/lib -lXaw7 -lXmu -lXt -lSM -lICE -lXpm -lXext -lX11 -lxcb -lXau -lXdmcp -lncurses -lm -lc" \
 	        ./configure --host=x86_64-elf --without-xinerama --disable-imake --disable-setuid --disable-setgid --disable-freetype --without-pcre --without-pcre2 --disable-luit; \
 	    fi && \
-	    $(MAKE) EXTRA_CFLAGS="-DUSE_SYSV_PGRP=1 -DHAVE_GRANTPT_PTY_ISATTY=1" && \
+	    $(MAKE) -j$(JOBS) EXTRA_CFLAGS="-DUSE_SYSV_PGRP=1 -DHAVE_GRANTPT_PTY_ISATTY=1" && \
 	    cp -f xterm $(abspath $(ROOTFS_DIR))/bin/xterm && \
 	    cp -f resize $(abspath $(ROOTFS_DIR))/bin/resize 2>/dev/null || true
 	@chmod +x $@
@@ -713,7 +712,7 @@ $(ROOTFS_DIR)/etc/ssl/cert.pem: scripts/fetch_cacerts.py | $(ROOTFS_DIR)
 # ==============================================================================
 # OpenSSL (libcrypto.so, libssl.so, /bin/openssl)
 # ==============================================================================
-$(OPENSSL_BUILD_DIR)/Makefile: $(SYSROOT_STAMP) | $(OPENSSL_BUILD_DIR)
+$(OPENSSL_BUILD_DIR)/Makefile: $(abspath third_party/openssl)/Configure | $(SYSROOT_STAMP) $(OPENSSL_BUILD_DIR)
 	@echo "  [CONF-OPENSSL] Konfiguracja OpenSSL (x86_64 cross-compile)..."
 	@cd $(OPENSSL_BUILD_DIR) && \
 	perl $(abspath third_party/openssl)/Configure \
@@ -799,10 +798,10 @@ OPENSSL_APP_OBJS = \
 
 OPENSSL_STAMP := $(OPENSSL_BUILD_DIR)/.built
 
-$(OPENSSL_STAMP): $(OPENSSL_BUILD_DIR)/Makefile $(LIBC_SO) $(LIBM_SO) $(CRT0_O) $(LIBC_A) | $(ROOTFS_DIR)
+$(OPENSSL_STAMP): $(OPENSSL_BUILD_DIR)/Makefile | $(LIBC_SO) $(LIBM_SO) $(CRT0_O) $(LIBC_A) $(ROOTFS_DIR)
 	@mkdir -p $(OPENSSL_BUILD_DIR) $(OPENSSL_BUILD_DIR)/ssl $(OPENSSL_BUILD_DIR)/crypto $(OPENSSL_BUILD_DIR)/apps $(OPENSSL_BUILD_DIR)/providers $(ROOTFS_DIR)/lib $(ROOTFS_DIR)/bin $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/openssl $(SYSROOT_DIR)/usr/lib/pkgconfig $(SYSROOT_DIR)/usr/share/pkgconfig
 	@echo "  [MAKE-OPENSSL] Kompilacja OpenSSL (libcrypto, libssl, CLI)..."
-	@$(MAKE) -C $(OPENSSL_BUILD_DIR) build_sw
+	@$(MAKE) -j$(JOBS) -C $(OPENSSL_BUILD_DIR) build_sw
 	@$(LD) -shared -soname libcrypto.so.4 -o $(OPENSSL_BUILD_DIR)/libcrypto.so.4 --whole-archive $(OPENSSL_BUILD_DIR)/libcrypto.a --no-whole-archive -L$(abspath $(SYSROOT_DIR))/usr/lib -lc -lm
 	@rm -f $(OPENSSL_BUILD_DIR)/libcrypto.so
 	@ln -sf libcrypto.so.4 $(OPENSSL_BUILD_DIR)/libcrypto.so
@@ -842,7 +841,7 @@ third_party/curl/configure: third_party/curl/configure.ac
 	@echo "  [PRECONF-CURL] Generowanie configure dla cURL..."
 	@cd third_party/curl && autoreconf -fi 2>/dev/null || true
 
-$(CURL_BUILD_DIR)/Makefile: third_party/curl/configure $(ROOTFS_DIR)/lib/libssl.so $(ROOTFS_DIR)/lib/libcrypto.so $(LIBZ_A) $(SYSROOT_STAMP) | $(CURL_BUILD_DIR)
+$(CURL_BUILD_DIR)/Makefile: third_party/curl/configure | $(ROOTFS_DIR)/lib/libssl.so $(ROOTFS_DIR)/lib/libcrypto.so $(LIBZ_A) $(SYSROOT_STAMP) $(CURL_BUILD_DIR)
 	@echo "  [CONF-CURL] Konfiguracja cURL (Autotools cross-compile z OpenSSL)..."
 	@cd $(CURL_BUILD_DIR) && \
 	PKG_CONFIG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig" \
@@ -888,7 +887,7 @@ $(CURL_BUILD_DIR):
 $(ROOTFS_DIR)/lib/libcurl.so: $(CURL_BUILD_DIR)/Makefile $(ROOTFS_DIR)/lib/libssl.so $(ROOTFS_DIR)/lib/libcrypto.so $(LIBZ_A)
 	@mkdir -p $(CURL_BUILD_DIR) $(ROOTFS_DIR)/lib $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/include/curl $(SYSROOT_DIR)/usr/lib/pkgconfig
 	@echo "  [MAKE-LIBCURL] Kompilacja libcurl..."
-	@$(MAKE) -C $(CURL_BUILD_DIR)/lib
+	@$(MAKE) -j$(JOBS) -C $(CURL_BUILD_DIR)/lib
 	@$(LD) -shared -soname libcurl.so.4 -o $(CURL_BUILD_DIR)/lib/libcurl.so.4 --whole-archive $(CURL_BUILD_DIR)/lib/.libs/libcurl.a --no-whole-archive -L$(abspath $(SYSROOT_DIR))/usr/lib -lssl -lcrypto -lz -lc -lm
 	@rm -f $(CURL_BUILD_DIR)/lib/libcurl.so
 	@ln -sf libcurl.so.4 $(CURL_BUILD_DIR)/lib/libcurl.so
@@ -904,13 +903,72 @@ $(ROOTFS_DIR)/lib/libcurl.so: $(CURL_BUILD_DIR)/Makefile $(ROOTFS_DIR)/lib/libss
 $(ROOTFS_DIR)/bin/curl: $(ROOTFS_DIR)/lib/libcurl.so $(ROOTFS_DIR)/lib/libssl.so $(ROOTFS_DIR)/lib/libcrypto.so $(LIBZ_A) $(CRT0_O) | $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin
 	@echo "  [MAKE-CURL] Kompilacja narzędzia CLI cURL..."
-	@$(MAKE) -C $(CURL_BUILD_DIR)/src curl-config2setopts.o curl-tool_main.o 2>/dev/null || true
-	@$(MAKE) -C $(CURL_BUILD_DIR)/src curl 2>/dev/null || true
+	@$(MAKE) -j$(JOBS) -C $(CURL_BUILD_DIR)/src curl-config2setopts.o curl-tool_main.o 2>/dev/null || true
+	@$(MAKE) -j$(JOBS) -C $(CURL_BUILD_DIR)/src curl 2>/dev/null || true
 	@$(CC) $(USER_CFLAGS) -nostdlib $(abspath $(SYSROOT_DIR))/usr/lib/crt0.o -o $@ \
 	    $(CURL_BUILD_DIR)/src/curl-*.o \
 	    $(CURL_BUILD_DIR)/src/toolx/curl-*.o \
 	    $(CURL_BUILD_DIR)/lib/.libs/libcurlu.a \
 	    -L$(CURL_BUILD_DIR)/lib -L$(abspath $(SYSROOT_DIR))/usr/lib -lcurl -lssl -lcrypto -lz -ldl -lc -lm
 
+# ==============================================================================
+# OpenSSH Portable (sshd, sshd-session, sshd-auth, ssh-keygen, ssh, sftp-server)
+# ==============================================================================
+third_party/openssh/configure: third_party/openssh/configure.ac
+	@echo "  [PRECONF-OPENSSH] Generowanie configure dla OpenSSH..."
+	@cd $(OPENSSH_SRC_DIR) && autoreconf -fi
+
+$(OPENSSH_BUILD_DIR)/Makefile: third_party/openssh/configure | $(ROOTFS_DIR)/lib/libssl.so $(ROOTFS_DIR)/lib/libcrypto.so $(LIBZ_A) $(SYSROOT_STAMP) $(OPENSSH_BUILD_DIR)
+	@echo "  [CONF-OPENSSH] Konfiguracja OpenSSH (Autotools cross-compile)..."
+	@cd $(OPENSSH_BUILD_DIR) && \
+	$(OPENSSH_SRC_DIR)/configure \
+	    --host=x86_64-elf \
+	    --prefix=/usr \
+	    --sysconfdir=/etc/ssh \
+	    --libexecdir=/usr/libexec \
+	    --sbindir=/usr/sbin \
+	    --bindir=/usr/bin \
+	    --with-privsep-path=/var/empty \
+	    --with-privsep-user=sshd \
+	    --with-ssl-dir="$(abspath $(SYSROOT_DIR))/usr" \
+	    --with-zlib="$(abspath $(SYSROOT_DIR))/usr" \
+	    --with-sandbox=no \
+	    --without-pam \
+	    --without-selinux \
+	    --disable-strip \
+	    --disable-fd-passing \
+	    CC="$(CC)" \
+	    AR="$(AR)" \
+	    RANLIB="$(RANLIB)" \
+	    CFLAGS="-O2 -ffreestanding -fno-builtin -isystem $(abspath $(SYSROOT_DIR))/usr/include -B$(abspath $(SYSROOT_DIR))/usr/lib -fPIC" \
+	    CPPFLAGS="-isystem $(abspath $(SYSROOT_DIR))/usr/include" \
+	    LDFLAGS="-nostdlib $(abspath $(SYSROOT_DIR))/usr/lib/crt0.o -L$(abspath $(SYSROOT_DIR))/usr/lib -B$(abspath $(SYSROOT_DIR))/usr/lib" \
+	    LIBS="-lssl -lcrypto -lz -lc -lm"
+	@sed -i '' 's|/\* #undef HAVE_BZERO \*/|#define HAVE_BZERO 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_BZERO \*/|#define HAVE_BZERO 1|' $(OPENSSH_BUILD_DIR)/config.h
+	@sed -i '' 's|/\* #undef HAVE_FSTATVFS \*/|#define HAVE_FSTATVFS 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_FSTATVFS \*/|#define HAVE_FSTATVFS 1|' $(OPENSSH_BUILD_DIR)/config.h
+	@sed -i '' 's|/\* #undef HAVE_SYS_MOUNT_H \*/|#define HAVE_SYS_MOUNT_H 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_SYS_MOUNT_H \*/|#define HAVE_SYS_MOUNT_H 1|' $(OPENSSH_BUILD_DIR)/config.h
+	@sed -i '' 's|/\* #undef HAVE_SETRESUID \*/|#define HAVE_SETRESUID 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_SETRESUID \*/|#define HAVE_SETRESUID 1|' $(OPENSSH_BUILD_DIR)/config.h
+	@sed -i '' 's|/\* #undef HAVE_SETRESGID \*/|#define HAVE_SETRESGID 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_SETRESGID \*/|#define HAVE_SETRESGID 1|' $(OPENSSH_BUILD_DIR)/config.h
+	@sed -i '' 's|/\* #undef NO_UID_RESTORATION_TEST \*/|#define NO_UID_RESTORATION_TEST 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef NO_UID_RESTORATION_TEST \*/|#define NO_UID_RESTORATION_TEST 1|' $(OPENSSH_BUILD_DIR)/config.h
+	@sed -i '' 's|/\* #undef DISABLE_FD_PASSING \*/|#define DISABLE_FD_PASSING 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef DISABLE_FD_PASSING \*/|#define DISABLE_FD_PASSING 1|' $(OPENSSH_BUILD_DIR)/config.h
+
+$(OPENSSH_BUILD_DIR):
+	@mkdir -p $@
+
+$(ROOTFS_DIR)/usr/sbin/sshd: $(OPENSSH_BUILD_DIR)/Makefile | $(ROOTFS_DIR)/lib/libssl.so $(ROOTFS_DIR)/lib/libcrypto.so $(LIBZ_A) $(SYSROOT_STAMP) $(ROOTFS_DIR)
+	@mkdir -p $(ROOTFS_DIR)/usr/sbin $(ROOTFS_DIR)/usr/bin $(ROOTFS_DIR)/usr/libexec $(ROOTFS_DIR)/bin $(ROOTFS_DIR)/etc/ssh $(ROOTFS_DIR)/var/empty
+	@echo "  [MAKE-OPENSSH] Kompilacja OpenSSH (sshd, sshd-session, sshd-auth, ssh-keygen, ssh)..."
+	@$(MAKE) -j$(JOBS) -C $(OPENSSH_BUILD_DIR) sshd sshd-session sshd-auth ssh-keygen ssh sftp-server
+	@cp -f $(OPENSSH_BUILD_DIR)/sshd $(ROOTFS_DIR)/usr/sbin/sshd
+	@cp -f $(OPENSSH_BUILD_DIR)/sshd-session $(ROOTFS_DIR)/usr/libexec/sshd-session
+	@cp -f $(OPENSSH_BUILD_DIR)/sshd-auth $(ROOTFS_DIR)/usr/libexec/sshd-auth
+	@cp -f $(OPENSSH_BUILD_DIR)/ssh-keygen $(ROOTFS_DIR)/usr/bin/ssh-keygen
+	@cp -f $(OPENSSH_BUILD_DIR)/ssh $(ROOTFS_DIR)/usr/bin/ssh
+	@cp -f $(OPENSSH_BUILD_DIR)/sftp-server $(ROOTFS_DIR)/usr/libexec/sftp-server
+	@ln -sf /usr/sbin/sshd $(ROOTFS_DIR)/bin/sshd
+	@ln -sf /usr/bin/ssh-keygen $(ROOTFS_DIR)/bin/ssh-keygen
+	@ln -sf /usr/bin/ssh $(ROOTFS_DIR)/bin/ssh
+	@chmod 755 $(ROOTFS_DIR)/var/empty
+
 .PHONY: third-party
-third-party: $(LIBNCURSES_A) $(LIBZ_A) $(ROOTFS_DIR)/bin/nano $(ROOTFS_DIR)/bin/file $(MAGIC_DB) $(ROOTFS_DIR)/bin/zsh $(ROOTFS_DIR)/bin/fastfetch $(ROOTFS_DIR)/bin/git $(ALL_ROOTFS_SOS) $(ROOTFS_DIR)/bin/xterm $(ROOTFS_DIR)/bin/openssl $(ROOTFS_DIR)/bin/curl $(ROOTFS_DIR)/etc/ssl/cert.pem
+third-party: $(LIBNCURSES_A) $(LIBZ_A) $(ROOTFS_DIR)/bin/nano $(ROOTFS_DIR)/bin/file $(MAGIC_DB) $(ROOTFS_DIR)/bin/zsh $(ROOTFS_DIR)/bin/fastfetch $(ROOTFS_DIR)/bin/git $(ALL_ROOTFS_SOS) $(ROOTFS_DIR)/bin/xterm $(ROOTFS_DIR)/bin/openssl $(ROOTFS_DIR)/bin/curl $(ROOTFS_DIR)/etc/ssl/cert.pem $(ROOTFS_DIR)/usr/sbin/sshd

@@ -222,7 +222,7 @@ static int64_t sys_write(int fd, const void *buf, size_t count) {
     return bytes;
 }
 
-static void ensure_std_fd(process_t *proc, int fd) {
+__attribute__((unused)) static void ensure_std_fd(process_t *proc, int fd) {
     if (!proc || fd < 0 || fd >= 3)
         return;
     if (!proc->fds[fd]) {
@@ -246,8 +246,17 @@ static int64_t sys_open(const char *path, int flags, mode_t mode) {
     if (vfs_resolve_path(path, full_path, sizeof(full_path)) != 0)
         return -2; /* ENOENT */
 
+    /* Special handling for /dev/tty (process controlling terminal) */
+    vfs_node_t *node = NULL;
+    if (strcmp(full_path, "/dev/tty") == 0) {
+        if (!proc->has_ctty || !proc->ctty) {
+            return -6; /* -ENXIO: No controlling terminal */
+        }
+        node = proc->ctty;
+    } else {
+        node = vfs_lookup(full_path);
+    }
     bool newly_created = false;
-    vfs_node_t *node = vfs_lookup(full_path);
     if (!node) {
         /* File doesn't exist. Check if O_CREAT is set */
         if (flags & O_CREAT) {
@@ -355,6 +364,20 @@ static int64_t sys_open(const char *path, int flags, mode_t mode) {
 
     proc->fds[fd] = f;
     proc->fd_cloexec[fd] = (flags & 0x80000) ? true : false; /* O_CLOEXEC */
+
+    /* POSIX controlling terminal acquisition for session leaders */
+    if (!(flags & O_NOCTTY)) {
+        if (proc->sid == proc->pid && (!proc->has_ctty || !proc->ctty)) {
+            if (open_node->flags == VFS_TYPE_CHARDEVICE &&
+                (strncmp(open_node->name, "console", 7) == 0 ||
+                 strncmp(open_node->name, "serial", 6) == 0 ||
+                 strncmp(open_node->name, "pts", 3) == 0)) {
+                proc->has_ctty = true;
+                proc->ctty = node;
+            }
+        }
+    }
+
     return fd;
 }
 
@@ -365,11 +388,31 @@ static ssize_t pipe_read_op(vfs_node_t *node, off_t offset, size_t size, void *b
     pipe_chan_t *p = (pipe_chan_t *)node->device_data;
     uint8_t *buf = (uint8_t *)buffer;
 
+    process_t *proc = sched_get_current_process();
+    bool is_nonblock = false;
+    if (proc) {
+        for (int i = 0; i < MAX_FD; i++) {
+            if (proc->fds[i] && proc->fds[i]->node == node) {
+                if (proc->fds[i]->flags & 0x800) {
+                    is_nonblock = true;
+                }
+                break;
+            }
+        }
+    }
+
+    if (is_nonblock && p->count == 0) {
+        if (p->writers <= 0) {
+            return 0; /* EOF: all writers closed */
+        }
+        return -11; /* -EAGAIN */
+    }
+
     while (p->count == 0) {
         if (p->writers <= 0) {
             return 0; /* EOF: all writers closed */
         }
-        sched_yield();
+        thread_sleep(1);
     }
 
     size_t read_bytes = 0;
@@ -393,12 +436,28 @@ static ssize_t pipe_write_op(vfs_node_t *node, off_t offset, size_t size, const 
         return -1; /* EPIPE: broken pipe */
     }
 
+    process_t *proc = sched_get_current_process();
+    bool is_nonblock = false;
+    if (proc) {
+        for (int i = 0; i < MAX_FD; i++) {
+            if (proc->fds[i] && proc->fds[i]->node == node) {
+                if (proc->fds[i]->flags & 0x800) {
+                    is_nonblock = true;
+                }
+                break;
+            }
+        }
+    }
+
     size_t written = 0;
     while (written < size) {
         while (p->count >= PIPE_BUF_SIZE) {
             if (p->readers <= 0)
                 return -1;
-            sched_yield();
+            if (is_nonblock) {
+                return (written > 0) ? (ssize_t)written : -11; /* -EAGAIN */
+            }
+            thread_sleep(1);
         }
         p->data[p->head] = buf[written++];
         p->head = (p->head + 1) % PIPE_BUF_SIZE;
@@ -495,22 +554,7 @@ static int64_t sys_close(int fd) {
     file_descriptor_t *f = proc->fds[fd];
     proc->fds[fd] = NULL;
     proc->fd_cloexec[fd] = false;
-    f->refcount--;
-    if (f->refcount == 0) {
-        if (f->node && (f->node->flags == VFS_TYPE_PIPE) && f->node->device_data) {
-            pipe_chan_t *p = (pipe_chan_t *)f->node->device_data;
-            if (f->flags & O_WRONLY) {
-                p->writers--;
-            } else {
-                p->readers--;
-            }
-            if (p->readers <= 0 && p->writers <= 0) {
-                kfree(p);
-                kfree(f->node);
-            }
-        }
-        kfree(f);
-    }
+    fd_release(f);
     return 0;
 }
 
@@ -908,6 +952,8 @@ static int64_t sys_setreuid(uid_t ruid, uid_t euid) {
     process_t *proc = sched_get_current_process();
     if (!proc)
         return -1;
+    uid_t old_ruid = proc->uid;
+    uid_t old_euid = proc->euid;
     if (ruid != (uid_t)-1) {
         if (proc->euid == 0 || ruid == proc->uid || ruid == proc->euid) {
             proc->uid = ruid;
@@ -915,10 +961,13 @@ static int64_t sys_setreuid(uid_t ruid, uid_t euid) {
             return -1;
     }
     if (euid != (uid_t)-1) {
-        if (proc->euid == 0 || euid == proc->uid || euid == proc->euid || euid == proc->suid) {
+        if (old_euid == 0 || euid == old_ruid || euid == old_euid || euid == proc->suid) {
             proc->euid = euid;
         } else
             return -1;
+    }
+    if (ruid != (uid_t)-1 || (euid != (uid_t)-1 && euid != old_ruid)) {
+        proc->suid = proc->euid;
     }
     return 0;
 }
@@ -927,6 +976,8 @@ static int64_t sys_setregid(gid_t rgid, gid_t egid) {
     process_t *proc = sched_get_current_process();
     if (!proc)
         return -1;
+    gid_t old_rgid = proc->gid;
+    gid_t old_egid = proc->egid;
     if (rgid != (gid_t)-1) {
         if (proc->euid == 0 || rgid == proc->gid || rgid == proc->egid) {
             proc->gid = rgid;
@@ -934,10 +985,13 @@ static int64_t sys_setregid(gid_t rgid, gid_t egid) {
             return -1;
     }
     if (egid != (gid_t)-1) {
-        if (proc->euid == 0 || egid == proc->gid || egid == proc->egid || egid == proc->sgid) {
+        if (proc->euid == 0 || egid == old_rgid || egid == old_egid || egid == proc->sgid) {
             proc->egid = egid;
         } else
             return -1;
+    }
+    if (rgid != (gid_t)-1 || (egid != (gid_t)-1 && egid != old_rgid)) {
+        proc->sgid = proc->egid;
     }
     return 0;
 }
@@ -1268,6 +1322,8 @@ static int64_t sys_clone(uint64_t flags, uintptr_t child_stack, uintptr_t ptid, 
         }
     }
 
+    memcpy(child_t->fpu_state, parent_t->fpu_state, 512);
+
     /* Allocate 16 KiB kernel stack */
     size_t stack_pages = 16 * 1024 / PAGE_SIZE;
     uintptr_t stack_phys = pmm_alloc_pages(stack_pages);
@@ -1322,6 +1378,8 @@ static int64_t sys_fork(void) {
     child->ppid = parent->pid;
     child->pgid = parent->pgid;
     child->sid = parent->sid;
+    child->has_ctty = parent->has_ctty;
+    child->ctty = parent->ctty;
     child->uid = parent->uid;
     child->gid = parent->gid;
     child->euid = parent->euid;
@@ -1371,6 +1429,7 @@ static int64_t sys_fork(void) {
     child_t->user_entry = parent_t->user_entry;
     child_t->user_stack = parent_t->user_stack;
     child_t->fs_base = parent_t->fs_base;
+    memcpy(child_t->fpu_state, parent_t->fpu_state, 512);
 
     /* Allocate 16 KiB kernel stack */
     size_t stack_pages = 16 * 1024 / PAGE_SIZE;
@@ -1884,17 +1943,24 @@ static int64_t sys_lseek(int fd, off_t offset, int whence) {
 
 static int64_t sys_ioctl(int fd, unsigned long request, void *argp) {
     if (fd < 0 || fd >= MAX_FD)
-        return -1;
+        return -9; /* -EBADF */
 
     process_t *proc = sched_get_current_process();
-    if (proc && proc->fds[fd] && proc->fds[fd]->node) {
+    if (proc && proc->fds[fd]) {
+        if (!proc->fds[fd]->node)
+            return -9; /* -EBADF */
         vfs_node_t *node = proc->fds[fd]->node;
         if (node->ops && node->ops->ioctl) {
             return node->ops->ioctl(node, request, (uintptr_t)argp);
         }
+        return -25; /* -ENOTTY: Inappropriate ioctl for device */
     }
 
-    return tty_ioctl(request, argp);
+    if (fd == 0 || fd == 1 || fd == 2) {
+        return tty_ioctl(request, argp);
+    }
+
+    return -9; /* -EBADF */
 }
 
 static void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, off_t offset) {
@@ -2013,13 +2079,29 @@ static int kernel_sys_poll(struct pollfd *fds, unsigned int nfds, int timeout) {
                 socket_t *sock = (socket_t *)node->device_data;
                 if (sock) {
                     if (sock->domain == AF_UNIX) {
-                        if ((fds[i].events & (0x0001 /* POLLIN */ | 0x0040 /* POLLRDNORM */ | 0x0080 /* POLLRDBAND */)) &&
-                            (sock->rx_len > 0 || sock->accept_count > 0 || sock->state == SS_CLOSED)) {
-                            fds[i].revents |= (fds[i].events & (0x0001 | 0x0040 | 0x0080));
-                        }
-                        if ((fds[i].events & (0x0004 /* POLLOUT */ | 0x0100 /* POLLWRNORM */ | 0x0200 /* POLLWRBAND */)) &&
-                            (sock->state == SS_CONNECTED || sock->state == SS_BIND)) {
-                            fds[i].revents |= (fds[i].events & (0x0004 | 0x0100 | 0x0200));
+                        if (sock->state == SS_LISTENING) {
+                            if ((fds[i].events & (0x0001 /* POLLIN */ | 0x0040 /* POLLRDNORM */ | 0x0080 /* POLLRDBAND */)) &&
+                                sock->accept_count > 0) {
+                                fds[i].revents |= (fds[i].events & (0x0001 | 0x0040 | 0x0080));
+                            }
+                            if (sock->state == SS_CLOSED) {
+                                fds[i].revents |= (POLLERR | 0x0010 /* POLLHUP */);
+                            }
+                        } else {
+                            if ((fds[i].events & (0x0001 /* POLLIN */ | 0x0040 /* POLLRDNORM */ | 0x0080 /* POLLRDBAND */)) &&
+                                (sock->rx_len > 0 || sock->state == SS_CLOSED ||
+                                 (sock->state == SS_CONNECTED && (!sock->peer || sock->peer->state == SS_CLOSED)))) {
+                                fds[i].revents |= (fds[i].events & (0x0001 | 0x0040 | 0x0080));
+                            }
+                            if (sock->state == SS_CLOSED ||
+                                (sock->state == SS_CONNECTED && (!sock->peer || sock->peer->state == SS_CLOSED))) {
+                                fds[i].revents |= 0x0010 /* POLLHUP */;
+                            }
+                            if ((fds[i].events & (0x0004 /* POLLOUT */ | 0x0100 /* POLLWRNORM */ | 0x0200 /* POLLWRBAND */)) &&
+                                sock->state == SS_CONNECTED && sock->peer && sock->peer->state != SS_CLOSED &&
+                                sock->peer->rx_len < SOCK_RX_BUF_SIZE) {
+                                fds[i].revents |= (fds[i].events & (0x0004 | 0x0100 | 0x0200));
+                            }
                         }
                     } else if (sock->type == SOCK_DGRAM) {
                         if ((fds[i].events & (0x0001 /* POLLIN */ | 0x0040 /* POLLRDNORM */ | 0x0080 /* POLLRDBAND */)) &&

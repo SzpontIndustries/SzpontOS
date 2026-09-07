@@ -114,3 +114,28 @@ struct group *getgrgid(gid_t gid) {
     endgrent();
     return NULL;
 }
+
+int initgroups(const char *user, gid_t group) {
+    if (!user)
+        return -1;
+
+    gid_t groups[32];
+    size_t ngroups = 0;
+    groups[ngroups++] = group;
+
+    setgrent();
+    struct group *gr;
+    while ((gr = getgrent()) != NULL && ngroups < 32) {
+        if (gr->gr_gid == group)
+            continue;
+        for (char **m = gr->gr_mem; m && *m; m++) {
+            if (strcmp(*m, user) == 0) {
+                groups[ngroups++] = gr->gr_gid;
+                break;
+            }
+        }
+    }
+    endgrent();
+
+    return setgroups(ngroups, groups);
+}

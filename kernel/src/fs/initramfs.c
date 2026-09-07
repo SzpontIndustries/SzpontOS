@@ -177,6 +177,7 @@ static initramfs_entry_t *create_entry(const char *name, uint32_t flags, size_t 
     entry->data = data;
     entry->capacity = size;
     entry->is_dynamic_data = false;
+    entry->node.device_data = data;
     return entry;
 }
 
@@ -249,6 +250,45 @@ static int initramfs_symlink(vfs_node_t *parent, const char *name, const char *t
     }
     child->is_dynamic_data = true;
     child->node.device_data = data;
+
+    return initramfs_add_child(p, child);
+}
+
+static int initramfs_link(vfs_node_t *parent, vfs_node_t *source, const char *new_name) {
+    initramfs_entry_t *p = (initramfs_entry_t *)parent;
+    initramfs_entry_t *src = (initramfs_entry_t *)source;
+    if (!p || p->node.flags != VFS_TYPE_DIRECTORY || !src || !new_name)
+        return -1;
+
+    /* Check if already exists */
+    for (size_t i = 0; i < p->child_count; i++) {
+        if (strcmp(p->children[i]->node.name, new_name) == 0) {
+            return -17; /* EEXIST */
+        }
+    }
+
+    void *data_copy = NULL;
+    size_t cap = src->capacity;
+    if (cap < src->node.length)
+        cap = src->node.length;
+    if (cap == 0 && src->node.length == 0)
+        cap = 512;
+
+    if (src->data && src->node.length > 0) {
+        data_copy = kmalloc(cap);
+        if (!data_copy)
+            return -12; /* ENOMEM */
+        memcpy(data_copy, src->data, src->node.length);
+    }
+
+    initramfs_entry_t *child = create_entry(new_name, src->node.flags, src->node.length,
+                                            data_copy, src->node.permissions, src->node.uid, src->node.gid);
+    if (!child) {
+        if (data_copy) kfree(data_copy);
+        return -12;
+    }
+    child->capacity = cap;
+    child->is_dynamic_data = true;
 
     return initramfs_add_child(p, child);
 }
@@ -487,6 +527,7 @@ vfs_node_t *initramfs_init(void *archive_ptr, size_t archive_size) {
     g_initramfs_dir_ops.rmdir = initramfs_rmdir;
     g_initramfs_dir_ops.rename = initramfs_rename;
     g_initramfs_dir_ops.symlink = initramfs_symlink;
+    g_initramfs_dir_ops.link = initramfs_link;
 
     g_initramfs_symlink_ops.read = NULL;
     g_initramfs_symlink_ops.write = NULL;
@@ -506,20 +547,58 @@ vfs_node_t *initramfs_init(void *archive_ptr, size_t archive_size) {
             break; /* Zero block indicates end of archive */
         }
 
-        size_t file_size = parse_octal(hdr->size, sizeof(hdr->size));
+        size_t raw_tar_size = parse_octal(hdr->size, sizeof(hdr->size));
+        size_t file_size = raw_tar_size;
         mode_t mode = (mode_t)parse_octal(hdr->mode, sizeof(hdr->mode));
         uid_t uid = (uid_t)parse_octal(hdr->uid, sizeof(hdr->uid));
         gid_t gid = (gid_t)parse_octal(hdr->gid, sizeof(hdr->gid));
         uint32_t flags = (hdr->typeflag == '5') ? VFS_TYPE_DIRECTORY : VFS_TYPE_FILE;
-        if (hdr->typeflag == '2') {
-            flags = VFS_TYPE_SYMLINK;
-        }
-        void *file_data = (void *)(ptr + 512);
+        void *file_data = NULL;
+        bool is_dynamic = false;
 
-        add_path_to_tree(root, hdr->name, flags, file_size, file_data, mode, uid, gid);
+        if (hdr->typeflag == '2' || hdr->typeflag == '1') {
+            flags = VFS_TYPE_SYMLINK;
+            /* In USTAR, symlink/hardlink target is in hdr->linkname (up to 100 bytes).
+             * Allocate a null-terminated string so it can be safely read as target. */
+            char *link_target = (char *)kmalloc(101);
+            if (link_target) {
+                memcpy(link_target, hdr->linkname, 100);
+                link_target[100] = '\0';
+                file_data = link_target;
+                file_size = strlen(link_target);
+                is_dynamic = true;
+            }
+        } else {
+            file_data = (void *)(ptr + 512);
+        }
+
+        char full_name[256];
+        if (hdr->prefix[0] != '\0') {
+            size_t plen = strnlen(hdr->prefix, 155);
+            size_t nlen = strnlen(hdr->name, 100);
+            if (plen + 1 + nlen < sizeof(full_name)) {
+                memcpy(full_name, hdr->prefix, plen);
+                full_name[plen] = '/';
+                memcpy(full_name + plen + 1, hdr->name, nlen);
+                full_name[plen + 1 + nlen] = '\0';
+            } else {
+                strncpy(full_name, hdr->name, 100);
+                full_name[100] = '\0';
+            }
+        } else {
+            size_t nlen = strnlen(hdr->name, 100);
+            memcpy(full_name, hdr->name, nlen);
+            full_name[nlen] = '\0';
+        }
+
+        initramfs_entry_t *entry = add_path_to_tree(root, full_name, flags, file_size, file_data, mode, uid, gid);
+        if (entry && is_dynamic) {
+            entry->is_dynamic_data = true;
+            entry->node.device_data = file_data;
+        }
         file_count++;
 
-        size_t block_count = DIV_ROUND_UP(file_size, 512);
+        size_t block_count = DIV_ROUND_UP(raw_tar_size, 512);
         ptr += 512 + block_count * 512;
     }
 

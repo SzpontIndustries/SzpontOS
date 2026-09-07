@@ -327,26 +327,38 @@ static size_t g_env_count = 0;
 char *getenv(const char *name) {
     if (!name)
         return NULL;
+    size_t len = strlen(name);
+
+    /* 1. Check dynamically set variables via setenv */
+    for (size_t i = 0; i < g_env_count; i++) {
+        if (strcmp(g_env_keys[i], name) == 0) {
+            return g_env_vals[i];
+        }
+    }
+
+    /* 2. Check environ array passed from execve */
+    if (environ) {
+        for (char **ep = environ; *ep; ep++) {
+            if (strncmp(*ep, name, len) == 0 && (*ep)[len] == '=') {
+                return *ep + len + 1;
+            }
+        }
+    }
+
+    /* 3. Fallback defaults */
     if (strcmp(name, "PATH") == 0)
         return "/bin:/usr/bin";
     if (strcmp(name, "HOME") == 0)
-        return "/";
+        return "/root";
     if (strcmp(name, "USER") == 0)
         return "root";
     if (strcmp(name, "SHELL") == 0)
         return "/bin/sh";
     if (strcmp(name, "TERM") == 0)
         return "xterm-256color";
-    if (strcmp(name, "DISPLAY") == 0)
-        return ":0";
     if (strcmp(name, "MAGIC") == 0)
         return "/etc/magic:/usr/share/misc/magic";
 
-    for (size_t i = 0; i < g_env_count; i++) {
-        if (strcmp(g_env_keys[i], name) == 0) {
-            return g_env_vals[i];
-        }
-    }
     return NULL;
 }
 

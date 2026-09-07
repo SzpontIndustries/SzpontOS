@@ -1,0 +1,31 @@
+#!/bin/sh
+# /etc/rc.d/05_sshd -- Start OpenSSH Daemon on SzpontOS
+# (C) Copyright by Szpont Industries. All rights reserved.
+
+if [ "$sshd_enable" = "NO" ]; then
+    exit 0
+fi
+
+if [ -f /usr/sbin/sshd ] || [ -f /bin/sshd ]; then
+    SSHD_BIN="/usr/sbin/sshd"
+    [ -f "$SSHD_BIN" ] || SSHD_BIN="/bin/sshd"
+
+    KEYGEN_BIN="/usr/bin/ssh-keygen"
+    [ -f "$KEYGEN_BIN" ] || KEYGEN_BIN="/bin/ssh-keygen"
+
+    mkdir -p /etc/ssh
+    mkdir -p /var/empty
+    chmod 755 /var/empty
+    mkdir -p /var/run
+    mkdir -p /var/log
+
+    if [ ! -f /etc/ssh/ssh_host_rsa_key ] || [ ! -f /etc/ssh/ssh_host_ed25519_key ]; then
+        echo "Generating OpenSSH host keys..."
+        if [ -x "$KEYGEN_BIN" ]; then
+            "$KEYGEN_BIN" -A
+        fi
+    fi
+
+    echo "Starting OpenSSH Daemon (sshd)..."
+    "$SSHD_BIN" -D -e >> /var/log/sshd.log 2>&1 &
+fi

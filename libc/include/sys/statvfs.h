@@ -35,6 +35,11 @@ struct statfs {
 };
 
 int statfs(const char *path, struct statfs *buf);
+int fstatfs(int fd, struct statfs *buf);
 int statvfs(const char *path, struct statvfs *buf);
+int fstatvfs(int fd, struct statvfs *buf);
+
+#define ST_RDONLY 1
+#define ST_NOSUID 2
 
 #endif /* _SYS_STATVFS_H */

@@ -47,5 +47,15 @@ int ffsl(long int i);
 
 char *strchrnul(const char *s, int c);
 void *memccpy(void *dest, const void *src, int c, size_t n);
+#undef bzero
+void bzero(void *s, size_t n);
+#undef bcopy
+void bcopy(const void *src, void *dst, size_t n);
+#undef bcmp
+int bcmp(const void *s1, const void *s2, size_t n);
+#undef index
+char *index(const char *s, int c);
+#undef rindex
+char *rindex(const char *s, int c);
 
 #endif /* _STRING_H */

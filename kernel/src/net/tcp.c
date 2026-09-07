@@ -75,11 +75,7 @@ int tcp_send_segment(uint32_t src_ip, uint16_t src_port, uint32_t dest_ip, uint1
     buf->offset = 0;
     tcp->checksum = tcp_checksum(src_ip, dest_ip, tcp, buf->len);
 
-    klog_info("TCP: send flags=0x%02x seq=%u ack=%u from %d.%d.%d.%d:%u to %d.%d.%d.%d:%u (len=%zu cksum=0x%04x)",
-              flags, seq, ack,
-              src_ip & 0xFF, (src_ip >> 8) & 0xFF, (src_ip >> 16) & 0xFF, (src_ip >> 24) & 0xFF, src_port,
-              dest_ip & 0xFF, (dest_ip >> 8) & 0xFF, (dest_ip >> 16) & 0xFF, (dest_ip >> 24) & 0xFF, dest_port,
-              len, tcp->checksum);
+
 
     return ipv4_output(NULL, dest_ip, IP_PROTO_TCP, buf);
 }
@@ -111,10 +107,7 @@ void tcp_input(netif_t *netif, net_buf_t *buf) {
     const uint8_t *payload = buf->data + buf->offset + hlen;
     size_t payload_len = buf->len - hlen;
 
-    klog_info("TCP: input flags=0x%02x seq=%u ack=%u from %d.%d.%d.%d:%u to port %u (len=%zu)",
-              flags, seq, ack,
-              ip->src_ip & 0xFF, (ip->src_ip >> 8) & 0xFF, (ip->src_ip >> 16) & 0xFF, (ip->src_ip >> 24) & 0xFF,
-              src_port, dest_port, payload_len);
+
 
     /* 1. Try to find established/connecting socket */
     socket_t *sock = socket_find_tcp(ip->dest_ip, dest_port, ip->src_ip, src_port);
@@ -154,6 +147,10 @@ void tcp_input(netif_t *netif, net_buf_t *buf) {
         sock->state = SS_CLOSED;
         net_buf_free(buf);
         return;
+    }
+
+    if (sock->local_ip == 0 && netif) {
+        sock->local_ip = netif->ip;
     }
 
     /* Process state machine */

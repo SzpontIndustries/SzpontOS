@@ -4,3 +4,4 @@ wheel:x:10:root,user,szpont
 users:x:100:
 user:x:1000:user
 szpont:x:1001:szpont
+sshd:x:22:

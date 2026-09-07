@@ -28,27 +28,28 @@ toolchain-info:
 # Build all core components
 build: toolchain-info libc sysroot userland modules third-party kernel
 
-# Subsystem delegates
-$(KERNEL_ELF): FORCE
-	@$(MAKE) -C $(ROOT_DIR)/kernel
+KERNEL_SRCS := $(shell find $(ROOT_DIR)/kernel/src $(ROOT_DIR)/kernel/include $(ROOT_DIR)/kernel/arch -type f 2>/dev/null)
+LIBC_SRCS   := $(shell find $(ROOT_DIR)/libc/src $(ROOT_DIR)/libc/include -type f 2>/dev/null)
 
-.PHONY: FORCE
+# Subsystem delegates
+$(KERNEL_ELF): $(KERNEL_SRCS) $(ROOT_DIR)/kernel/linker.ld $(ROOT_DIR)/kernel/Makefile
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/kernel
 
 kernel: $(KERNEL_ELF)
 
 libc:
-	@$(MAKE) -C $(ROOT_DIR)/libc libc
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/libc libc
 
-$(SYSROOT_STAMP): libc
-	@$(MAKE) -C $(ROOT_DIR)/libc sysroot
+$(SYSROOT_STAMP): $(LIBC_SRCS)
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/libc sysroot
 
 sysroot: $(SYSROOT_STAMP)
 
 modules:
-	@$(MAKE) -C $(ROOT_DIR)/modules
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/modules
 
 userland: $(SYSROOT_STAMP) $(ALL_ROOTFS_SOS)
-	@$(MAKE) -C $(ROOT_DIR)/userland
+	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/userland
 
 # ==============================================================================
 # Development Tooling & Compilation Database (clangd / bear)

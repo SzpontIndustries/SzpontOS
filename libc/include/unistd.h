@@ -141,6 +141,7 @@ void *sbrk(intptr_t increment);
 
 char *getcwd(char *buf, size_t size);
 int chdir(const char *path);
+int chroot(const char *path);
 int gethostname(char *name, size_t len);
 int sethostname(const char *name, size_t len);
 char *cuserid(char *s);
@@ -154,12 +155,18 @@ pid_t getsid(pid_t pid);
 pid_t tcgetpgrp(int fd);
 int tcsetpgrp(int fd, pid_t pgrp);
 int revoke(const char *path);
+int daemon(int nochdir, int noclose);
+char *crypt(const char *key, const char *salt);
 
 int link(const char *oldpath, const char *newpath);
 int symlink(const char *target, const char *linkpath);
 
 int getgroups(int size, gid_t list[]);
 int setgroups(size_t size, const gid_t *list);
+int setresuid(uid_t ruid, uid_t euid, uid_t suid);
+int setresgid(gid_t rgid, gid_t egid, gid_t sgid);
+int getresuid(uid_t *ruid, uid_t *euid, uid_t *suid);
+int getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid);
 
 void sync(void);
 int fsync(int fd);

@@ -1,4 +1,5 @@
 #include <fs/vfs.h>
+#include <fs/pipe.h>
 #include <sched/process.h>
 #include <sched/sched.h>
 #include <mm/heap.h>
@@ -182,12 +183,15 @@ static vfs_node_t *vfs_lookup_internal(const char *path, bool follow_symlinks, i
     /* Check mount point prefix matching */
     vfs_node_t *current = g_vfs_root;
     const char *subpath = norm_path;
+    char parent_dir[256] = "/";
 
     for (size_t i = 0; i < g_mount_count; i++) {
         size_t mlen = strlen(g_mounts[i].path);
         if (strncmp(norm_path, g_mounts[i].path, mlen) == 0) {
             if (norm_path[mlen] == '/' || norm_path[mlen] == '\0') {
                 current = g_mounts[i].node;
+                strncpy(parent_dir, g_mounts[i].path, sizeof(parent_dir) - 1);
+                parent_dir[sizeof(parent_dir) - 1] = '\0';
                 subpath = norm_path + mlen;
                 if (*subpath == '/')
                     subpath++;
@@ -247,7 +251,11 @@ static vfs_node_t *vfs_lookup_internal(const char *path, bool follow_symlinks, i
                             strncpy(full_target, target, sizeof(full_target) - 1);
                         } else {
                             /* Resolve relative to parent directory */
-                            strncpy(full_target, target, sizeof(full_target) - 1);
+                            if (strcmp(parent_dir, "/") == 0) {
+                                ksnprintf(full_target, sizeof(full_target), "/%s", target);
+                            } else {
+                                ksnprintf(full_target, sizeof(full_target), "%s/%s", parent_dir, target);
+                            }
                         }
                         full_target[sizeof(full_target) - 1] = '\0';
 
@@ -262,6 +270,11 @@ static vfs_node_t *vfs_lookup_internal(const char *path, bool follow_symlinks, i
             }
 
             current = next;
+            if (strcmp(parent_dir, "/") == 0) {
+                ksnprintf(parent_dir, sizeof(parent_dir), "/%s", token);
+            } else {
+                ksnprintf(parent_dir, sizeof(parent_dir), "%s/%s", parent_dir, token);
+            }
         }
 
         if (next_slash) {
@@ -708,4 +721,29 @@ int vfs_access(const char *path, int mode) {
         return -13;
 
     return 0;
+}
+
+void fd_release(file_descriptor_t *f) {
+    if (!f)
+        return;
+    f->refcount--;
+    if (f->refcount == 0) {
+        if (f->node) {
+            if ((f->node->flags == VFS_TYPE_PIPE) && f->node->device_data) {
+                pipe_chan_t *p = (pipe_chan_t *)f->node->device_data;
+                if (f->flags & O_WRONLY) {
+                    p->writers--;
+                } else {
+                    p->readers--;
+                }
+                if (p->readers <= 0 && p->writers <= 0) {
+                    kfree(p);
+                }
+                kfree(f->node);
+            } else if (f->node->ops && f->node->ops->close) {
+                f->node->ops->close(f->node);
+            }
+        }
+        kfree(f);
+    }
 }

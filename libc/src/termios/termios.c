@@ -18,6 +18,10 @@ int ioctl(int fd, unsigned long request, ...) {
     va_end(args);
 
     int64_t ret = __syscall3(SYS_ioctl, fd, (int64_t)request, (int64_t)argp);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
     return (int)ret;
 }
 

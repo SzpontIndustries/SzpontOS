@@ -16,6 +16,7 @@
 #include <sys/un.h>
 #include <netinet/in.h>
 #include <sys/stat.h>
+#include <fcntl.h>
 
 server_t g_server;
 
@@ -54,6 +55,9 @@ static int create_unix_socket(int display_num) {
         return -1;
     }
 
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
+
     chmod(path, 0777);
     printf("[SzpontX11] Listening on UNIX domain socket: %s (FD %d)\n", path, fd);
     return fd;
@@ -86,6 +90,9 @@ static int create_tcp_socket(int display_num) {
         close(fd);
         return -1;
     }
+
+    int flags = fcntl(fd, F_GETFL, 0);
+    fcntl(fd, F_SETFL, flags | O_NONBLOCK);
 
     printf("[SzpontX11] Listening on TCP port: %d (FD %d)\n", 6000 + display_num, fd);
     return fd;
@@ -222,7 +229,7 @@ int main(int argc, char *argv[]) {
                 }
             }
             if (fds[i].revents & (POLLERR | POLLHUP | POLLNVAL)) {
-                if (fd_client_map[i]) {
+                if (fd_client_map[i] && fd_client_map[i]->active) {
                     client_close(fd_client_map[i]);
                 }
             }

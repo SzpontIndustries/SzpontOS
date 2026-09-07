@@ -24,6 +24,7 @@
 #define SIGTSTP 20
 #define SIGTTIN 21
 #define SIGTTOU 22
+#define SIGWINCH 28
 
 #define NSIG 32
 

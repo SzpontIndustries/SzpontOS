@@ -33,6 +33,8 @@ typedef struct thread {
     struct process *futex_proc;
     int exit_code;
 
+    uint8_t fpu_state[512] __attribute__((aligned(16)));
+
     list_node_t sched_node;
     list_node_t proc_node;
     list_node_t futex_node;

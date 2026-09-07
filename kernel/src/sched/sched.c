@@ -14,7 +14,7 @@ static thread_t *g_idle_thread = NULL;
 static spinlock_t g_sched_lock = SPINLOCK_INIT;
 static bool g_sched_started = false;
 
-extern void arch_switch_context(uintptr_t *old_rsp, uintptr_t new_rsp);
+extern void arch_switch_context(uintptr_t *old_rsp, uintptr_t new_rsp, void *old_fpu, const void *new_fpu);
 
 static void idle_thread_func(void) {
     while (1) {
@@ -89,11 +89,16 @@ void sched_yield(void) {
 
     /* Pick next thread from ready queue */
     thread_t *next = NULL;
-    if (!list_is_empty(&g_ready_queue)) {
+    while (!list_is_empty(&g_ready_queue)) {
         list_node_t *head = g_ready_queue.next;
         list_remove(head);
-        next = container_of(head, thread_t, sched_node);
-    } else {
+        thread_t *cand = container_of(head, thread_t, sched_node);
+        if (cand->state == THREAD_READY) {
+            next = cand;
+            break;
+        }
+    }
+    if (!next) {
         next = g_idle_thread;
     }
 
@@ -115,7 +120,9 @@ void sched_yield(void) {
         spinlock_release(&g_sched_lock);
         static uintptr_t boot_rsp = 0;
         uintptr_t *old_rsp_ptr = prev ? &prev->rsp : &boot_rsp;
-        arch_switch_context(old_rsp_ptr, next->rsp);
+        void *old_fpu = prev ? prev->fpu_state : NULL;
+        const void *new_fpu = next ? next->fpu_state : NULL;
+        arch_switch_context(old_rsp_ptr, next->rsp, old_fpu, new_fpu);
         spinlock_irqrestore(flags);
     } else {
         spinlock_release_irqrestore(&g_sched_lock, flags);

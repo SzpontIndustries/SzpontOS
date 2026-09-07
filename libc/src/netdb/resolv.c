@@ -337,3 +337,29 @@ int nss_get_hosts_order(int *order, int max_order) {
     fclose(fp);
     return count > 0 ? count : 2;
 }
+
+int dn_expand(const unsigned char *msg, const unsigned char *eomorig,
+              const unsigned char *comp_dn, char *exp_dn, int length) {
+    if (!comp_dn || !exp_dn || length <= 0)
+        return -1;
+    int len = 0;
+    const unsigned char *cp = comp_dn;
+    while (*cp != 0 && len < length - 1) {
+        int label_len = *cp++;
+        if ((label_len & 0xc0) == 0xc0) {
+            int offset = ((label_len & 0x3f) << 8) | *cp++;
+            if (msg && eomorig && (msg + offset < eomorig)) {
+                cp = msg + offset;
+                continue;
+            }
+            break;
+        }
+        for (int i = 0; i < label_len && len < length - 1; i++) {
+            exp_dn[len++] = *cp++;
+        }
+        if (*cp != 0 && len < length - 1)
+            exp_dn[len++] = '.';
+    }
+    exp_dn[len] = '\0';
+    return (int)(cp - comp_dn);
+}

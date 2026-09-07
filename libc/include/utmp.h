@@ -38,6 +38,10 @@ struct utmp {
     char ut_unused[20];
 };
 
+#define ut_name ut_user
+#define ut_time ut_tv.tv_sec
+#define ut_addr ut_addr_v6[0]
+
 #define _PATH_UTMP "/var/run/utmp"
 #define _PATH_WTMP "/var/log/wtmp"
 #define UTMP_FILE _PATH_UTMP
@@ -50,5 +54,6 @@ struct utmp *getutid(const struct utmp *ut);
 struct utmp *getutline(const struct utmp *ut);
 struct utmp *pututline(const struct utmp *ut);
 int utmpname(const char *file);
+int login_tty(int fd);
 
 #endif /* _UTMP_H */

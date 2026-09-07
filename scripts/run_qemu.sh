@@ -96,12 +96,20 @@ fi
 
 
 
-# Intel E1000 Network Card with User-mode NAT and port forwarding
+# Intel E1000 Network Card with User-mode NAT and port forwarding (HTTP & SSH)
 HTTP_PORT=8080
 while lsof -Pi :${HTTP_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; do
     HTTP_PORT=$((HTTP_PORT + 1))
 done
-EXTRA_FLAGS+=("-netdev" "user,id=net0,hostfwd=tcp::${HTTP_PORT}-:80" "-device" "e1000,netdev=net0")
+
+SSH_PORT=2222
+while lsof -Pi :${SSH_PORT} -sTCP:LISTEN -t >/dev/null 2>&1; do
+    SSH_PORT=$((SSH_PORT + 1))
+done
+
+EXTRA_FLAGS+=("-netdev" "user,id=net0,hostfwd=tcp::${HTTP_PORT}-:80,hostfwd=tcp::${SSH_PORT}-:22" "-device" "e1000,netdev=net0")
+echo "[*] Forwarding HTTP port: localhost:${HTTP_PORT} -> guest:80"
+echo "[*] Forwarding SSH port:  localhost:${SSH_PORT} -> guest:22 (ssh -p ${SSH_PORT} root@localhost)"
 
 
 # xHCI USB 3.0 & EHCI USB 2.0 Host Controllers with USB HID Devices

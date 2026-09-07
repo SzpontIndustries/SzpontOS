@@ -17,6 +17,7 @@ ARCH    := x86_64
 # ==============================================================================
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 JOBS  ?= $(NPROC)
+export MAKEFLAGS += -j$(JOBS)
 
 # ==============================================================================
 # Toolchain Auto-detection (Prefer GCC, fallback to Clang)
@@ -118,6 +119,8 @@ GIT_BUILD_DIR       := $(BUILD_DIR)/third_party/git
 FASTFETCH_BUILD_DIR := $(BUILD_DIR)/third_party/fastfetch
 OPENSSL_BUILD_DIR   := $(BUILD_DIR)/third_party/openssl
 CURL_BUILD_DIR      := $(BUILD_DIR)/third_party/curl
+OPENSSH_BUILD_DIR   := $(BUILD_DIR)/third_party/openssh
+OPENSSH_SRC_DIR     := $(abspath third_party/openssh)
 
 # Dynamic Kernel Modules
 MODULES := \

@@ -108,8 +108,9 @@ void isr_handler(interrupt_frame_t *frame) {
             klog_error("====================================================");
 
             process_exit(128 + frame->int_no);
-            sched_yield();
-            return;
+            while (1) {
+                sched_yield();
+            }
         }
 
         /* Kernel-mode exception: panic */

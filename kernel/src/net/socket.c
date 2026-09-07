@@ -44,13 +44,13 @@ static ssize_t socket_vfs_read(vfs_node_t *node, off_t offset, size_t size, void
     }
     if (sock->domain == AF_UNIX) {
         if (is_nonblock && sock->rx_len == 0) {
-            if (sock->state == SS_CLOSED) {
+            if (sock->state == SS_CLOSED || !sock->peer || sock->peer->state == SS_CLOSED) {
                 return 0; /* EOF */
             }
             return -11; /* -EAGAIN */
         }
         while (sock->rx_len == 0) {
-            if (sock->state == SS_CLOSED) {
+            if (sock->state == SS_CLOSED || !sock->peer || sock->peer->state == SS_CLOSED) {
                 return 0; /* EOF */
             }
             thread_sleep(1);
@@ -90,7 +90,7 @@ static ssize_t socket_vfs_write(vfs_node_t *node, off_t offset, size_t size, con
     socket_t *sock = (socket_t *)node->device_data;
 
     if (sock->domain == AF_UNIX) {
-        if (!sock->peer)
+        if (!sock->peer || sock->peer->state == SS_CLOSED)
             return -1;
         socket_t *peer = sock->peer;
 
@@ -136,6 +136,11 @@ static ssize_t socket_vfs_write(vfs_node_t *node, off_t offset, size_t size, con
         if (sock->state != SS_CONNECTED && sock->tcp_state != TCP_STATE_ESTABLISHED &&
             sock->tcp_state != TCP_STATE_SYN_RECEIVED) {
             return -107; /* -ENOTCONN */
+        }
+        if (sock->local_ip == 0) {
+            netif_t *def = ((sock->remote_ip & 0xFF) == 127) ? netif_get_loopback() : netif_get_default();
+            if (def)
+                sock->local_ip = def->ip;
         }
         tcp_send_segment(sock->local_ip, sock->local_port, sock->remote_ip, sock->remote_port, sock->snd_nxt,
                          sock->rcv_nxt, TCP_FLAG_ACK | TCP_FLAG_PSH, buffer, size);
@@ -220,6 +225,7 @@ void socket_destroy(socket_t *sock) {
     }
 
     if (sock->domain == AF_UNIX && sock->peer) {
+        sock->peer->state = SS_CLOSED;
         sock->peer->peer = NULL;
         sock->peer = NULL;
     }
@@ -290,6 +296,11 @@ socket_t *socket_create_child(socket_t *listener, uint32_t remote_ip, uint16_t r
         return NULL;
 
     child->local_ip = listener->local_ip;
+    if (child->local_ip == 0) {
+        netif_t *def = ((remote_ip & 0xFF) == 127) ? netif_get_loopback() : netif_get_default();
+        if (def)
+            child->local_ip = def->ip;
+    }
     child->local_port = listener->local_port;
     child->remote_ip = remote_ip;
     child->remote_port = remote_port;
@@ -510,7 +521,6 @@ int sys_accept(int fd, struct sockaddr *addr, uint32_t *addrlen) {
     fdesc->refcount = 1;
 
     proc->fds[new_fd] = fdesc;
-    klog_info("NET: sys_accept on FD %d returned new FD %d", fd, new_fd);
 
     if (addr && addrlen) {
         if (child->domain == AF_UNIX && *addrlen >= sizeof(struct sockaddr_un)) {
@@ -780,13 +790,13 @@ ssize_t sys_recvfrom(int fd, void *buf, size_t len, int flags, struct sockaddr *
     }
     if (sock->domain == AF_UNIX) {
         if (is_nonblock && sock->rx_len == 0) {
-            if (sock->state == SS_CLOSED) {
+            if (sock->state == SS_CLOSED || !sock->peer || sock->peer->state == SS_CLOSED) {
                 return 0; /* EOF */
             }
             return -11; /* -EAGAIN */
         }
         while (sock->rx_len == 0) {
-            if (sock->state == SS_CLOSED) {
+            if (sock->state == SS_CLOSED || !sock->peer || sock->peer->state == SS_CLOSED) {
                 return 0; /* EOF */
             }
             thread_sleep(1);
@@ -836,12 +846,20 @@ int sys_shutdown(int fd, int how) {
         return -1;
     if (sock->domain == AF_INET && sock->type == SOCK_STREAM &&
         (sock->tcp_state == TCP_STATE_ESTABLISHED || sock->tcp_state == TCP_STATE_SYN_RECEIVED)) {
+        if (sock->local_ip == 0) {
+            netif_t *def = ((sock->remote_ip & 0xFF) == 127) ? netif_get_loopback() : netif_get_default();
+            if (def)
+                sock->local_ip = def->ip;
+        }
         tcp_send_segment(sock->local_ip, sock->local_port, sock->remote_ip, sock->remote_port,
                          sock->snd_nxt, sock->rcv_nxt, TCP_FLAG_FIN | TCP_FLAG_ACK, NULL, 0);
         sock->snd_nxt++;
         sock->tcp_state = TCP_STATE_FIN_WAIT_1;
     }
     sock->state = SS_CLOSED;
+    if (sock->domain == AF_UNIX && sock->peer) {
+        sock->peer->state = SS_CLOSED;
+    }
     return 0;
 }
 

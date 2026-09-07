@@ -348,6 +348,26 @@ int tty_ioctl(uint64_t request, void *arg) {
     case 0x5410: /* TIOCSPGRP */
         return 0;
 
+    case 0x540E: /* TIOCSCTTY */ {
+        process_t *curr = sched_get_current_process();
+        if (curr) {
+            curr->has_ctty = true;
+            if (!curr->ctty) {
+                curr->ctty = vfs_lookup("/dev/console");
+            }
+        }
+        return 0;
+    }
+
+    case 0x5422: /* TIOCNOTTY */ {
+        process_t *curr = sched_get_current_process();
+        if (curr) {
+            curr->has_ctty = false;
+            curr->ctty = NULL;
+        }
+        return 0;
+    }
+
     case 0x541B: { /* FIONREAD */
         if (!arg)
             return -1;
@@ -372,6 +392,9 @@ int tty_ioctl(uint64_t request, void *arg) {
         *(int *)arg = fb_is_graphics_mode() ? 1 : 0;
         return 0;
     }
+
+    case 0x80045430: /* TIOCGPTN */
+        return -25; /* -ENOTTY: Console /dev/tty is not a pseudo-terminal */
 
     default:
         return 0; /* Graceful fallback */

@@ -2,6 +2,18 @@
 # /etc/rc -- SzpontOS System Startup Script
 # (C) Copyright by Szpont Industries. Inspired by FreeBSD /etc/rc.
 
-export PATH=/bin:/usr/bin
+export PATH=/bin:/usr/bin:/usr/sbin
 export HOME=/root
 export TERM=xterm-256color
+
+echo "Running /etc/rc system initialization..."
+
+if [ -f /etc/rc.conf ]; then
+    . /etc/rc.conf
+fi
+
+for script in /etc/rc.d/*; do
+    if [ -f "$script" ]; then
+        /bin/sh "$script"
+    fi
+done

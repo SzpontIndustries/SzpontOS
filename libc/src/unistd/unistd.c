@@ -20,6 +20,7 @@
 #include <pwd.h>
 #include <time.h>
 #include <errno.h>
+#include <termios.h>
 
 int errno = 0;
 
@@ -104,28 +105,47 @@ int pipe2(int pipefd[2], int flags) {
     return pipe(pipefd);
 }
 
-int isatty(int fd) {
-    return (fd == STDIN_FILENO || fd == STDOUT_FILENO || fd == STDERR_FILENO);
-}
+static char g_ttyname_buf[64];
 
-char *ttyname(int fd) {
-    if (isatty(fd)) {
-        return "/dev/tty";
+int isatty(int fd) {
+    if (fd < 0) {
+        errno = EBADF;
+        return 0;
     }
-    return NULL;
+    struct termios t;
+    if (ioctl(fd, TCGETS, &t) == 0) {
+        return 1;
+    }
+    errno = ENOTTY;
+    return 0;
 }
 
 int ttyname_r(int fd, char *buf, size_t buflen) {
-    if (!buf || buflen < 9) {
+    if (!buf || buflen < 16) {
         errno = ERANGE;
-        return -1;
+        return ERANGE;
     }
-    if (isatty(fd)) {
-        strcpy(buf, "/dev/tty");
+
+    if (!isatty(fd)) {
+        errno = ENOTTY;
+        return ENOTTY;
+    }
+
+    int ptn = 0;
+    if (ioctl(fd, TIOCGPTN, &ptn) == 0) {
+        snprintf(buf, buflen, "/dev/pts%d", ptn);
         return 0;
     }
-    errno = ENOTTY;
-    return -1;
+
+    snprintf(buf, buflen, "/dev/tty");
+    return 0;
+}
+
+char *ttyname(int fd) {
+    if (ttyname_r(fd, g_ttyname_buf, sizeof(g_ttyname_buf)) == 0) {
+        return g_ttyname_buf;
+    }
+    return NULL;
 }
 
 int access(const char *pathname, int mode) {
@@ -381,6 +401,14 @@ int chdir(const char *path) {
     return (int)__check_syscall(__syscall1(SYS_chdir, (int64_t)path));
 }
 
+int chroot(const char *path) {
+    if (!path) {
+        errno = EFAULT;
+        return -1;
+    }
+    return chdir(path);
+}
+
 unsigned int sleep(unsigned int seconds) {
     struct timespec req, rem;
     req.tv_sec = (time_t)seconds;
@@ -521,6 +549,16 @@ int statvfs(const char *path, struct statvfs *buf) {
     buf->f_flag = s.f_flags;
     buf->f_namemax = s.f_namelen;
     return 0;
+}
+
+int fstatvfs(int fd, struct statvfs *buf) {
+    (void)fd;
+    return statvfs("/", buf);
+}
+
+int fstatfs(int fd, struct statfs *buf) {
+    (void)fd;
+    return statfs("/", buf);
 }
 
 int rmdir(const char *pathname) {
@@ -967,4 +1005,40 @@ void *setmode(const char *mode_str) {
 mode_t getmode(const void *set, mode_t mode) {
     (void)set;
     return mode;
+}
+
+int setresuid(uid_t ruid, uid_t euid, uid_t suid) {
+    int64_t ret = __syscall3(SYS_setresuid, (int64_t)ruid, (int64_t)euid, (int64_t)suid);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return 0;
+}
+
+int setresgid(gid_t rgid, gid_t egid, gid_t sgid) {
+    int64_t ret = __syscall3(SYS_setresgid, (int64_t)rgid, (int64_t)egid, (int64_t)sgid);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return 0;
+}
+
+int getresuid(uid_t *ruid, uid_t *euid, uid_t *suid) {
+    int64_t ret = __syscall3(SYS_getresuid, (int64_t)ruid, (int64_t)euid, (int64_t)suid);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return 0;
+}
+
+int getresgid(gid_t *rgid, gid_t *egid, gid_t *sgid) {
+    int64_t ret = __syscall3(SYS_getresgid, (int64_t)rgid, (int64_t)egid, (int64_t)sgid);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return 0;
 }

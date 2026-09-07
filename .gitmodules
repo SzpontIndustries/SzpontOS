@@ -106,3 +106,6 @@
 [submodule "third_party/curl"]
 	path = third_party/curl
 	url = https://github.com/curl/curl.git
+[submodule "third_party/openssh"]
+	path = third_party/openssh
+	url = https://github.com/openssh/openssh-portable

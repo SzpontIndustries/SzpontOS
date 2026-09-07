@@ -7,5 +7,6 @@
 #define _UTIL_H
 
 #include <pty.h>
+#include <utmp.h>
 
 #endif /* _UTIL_H */

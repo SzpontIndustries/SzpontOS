@@ -1,7 +1,12 @@
 #!/bin/sh
 # /etc/rc.d/04_httpd -- Start HTTP daemon if configured
 
+if [ "$httpd_enable" = "NO" ]; then
+    exit 0
+fi
+
 if [ -f /bin/httpd ]; then
     echo "Starting SzpontOS HTTP Daemon (httpd)..."
-    httpd -d /www 80 &
+    mkdir -p /var/log
+    httpd 80 >> /var/log/httpd.log 2>&1 &
 fi

@@ -48,8 +48,12 @@ def create_initramfs(source_dir, output_file):
             tarinfo.gname = "root"
             if tarinfo.isdir():
                 tarinfo.mode = 0o755
-            elif arcname.startswith("bin/") or arcname.startswith("etc/rc") or arcname.startswith("etc/rc.d/"):
+            elif arcname.startswith("bin/") or arcname.startswith("usr/sbin/") or arcname.startswith("usr/bin/") or arcname.startswith("usr/libexec/") or arcname.startswith("etc/rc") or arcname.startswith("etc/rc.d/"):
                 tarinfo.mode = 0o755
+            elif arcname == "root/.ssh" or arcname.startswith("root/.ssh/"):
+                tarinfo.mode = 0o700 if tarinfo.isdir() else 0o600
+            elif (arcname.startswith("etc/ssh/") and arcname.endswith("_key")) or arcname in ("etc/shadow", "etc/master.passwd"):
+                tarinfo.mode = 0o600
         return tarinfo
 
     with tarfile.open(output_file, "w", format=tarfile.USTAR_FORMAT) as tar:

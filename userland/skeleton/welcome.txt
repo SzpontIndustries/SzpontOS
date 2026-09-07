@@ -1,3 +1,0 @@
-Witaj w systemie SzpontOS!
-(C) Copyright by Szpont Industries. All rights reserved.
-Ten plik pochodzi z ramdysku Initramfs (USTAR).

@@ -108,6 +108,12 @@ static ssize_t devfs_tty_write(vfs_node_t *node, off_t offset, size_t size, cons
     return tty_write(buffer, size);
 }
 
+static int devfs_tty_open(vfs_node_t *node, uint32_t flags) {
+    UNUSED(flags);
+    UNUSED(node);
+    return 0;
+}
+
 static int devfs_tty_ioctl(vfs_node_t *node, uint64_t request, uintptr_t arg) {
     UNUSED(node);
     return tty_ioctl(request, (void *)arg);
@@ -395,6 +401,7 @@ void devfs_init(void) {
 
     g_tty_ops.read = devfs_tty_read;
     g_tty_ops.write = devfs_tty_write;
+    g_tty_ops.open = devfs_tty_open;
     g_tty_ops.ioctl = devfs_tty_ioctl;
 
     g_psaux_ops.read = devfs_psaux_read;

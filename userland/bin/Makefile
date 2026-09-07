@@ -80,7 +80,7 @@ all: progs
 progs: $(CORE_PROGS)
 
 # Standard dynamic binaries linked against libc.so and libm.so
-$(ROOTFS_DIR)/bin/%: $(ROOT_DIR)/userland/bin/%.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) $(SYSROOT_STAMP) | $(ROOTFS_DIR)
+$(ROOTFS_DIR)/bin/%: $(ROOT_DIR)/userland/bin/%.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(BUILD_DIR)/userland/bin
 	@echo "  [CC]  $<"
 	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/$*.d -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -c $< -o $(BUILD_DIR)/userland/bin/$*.o
@@ -89,7 +89,7 @@ $(ROOTFS_DIR)/bin/%: $(ROOT_DIR)/userland/bin/%.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO
 	@chmod +x $@
 
 # Build donut (dynamically linked against libc.so and libm.so)
-$(ROOTFS_DIR)/bin/donut: $(ROOT_DIR)/userland/bin/donut.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) $(SYSROOT_STAMP) | $(ROOTFS_DIR)
+$(ROOTFS_DIR)/bin/donut: $(ROOT_DIR)/userland/bin/donut.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(BUILD_DIR)/userland/bin
 	@echo "  [CC-DYN] $<"
 	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/donut.d -c $< -o $(BUILD_DIR)/userland/bin/donut.o
@@ -97,7 +97,7 @@ $(ROOTFS_DIR)/bin/donut: $(ROOT_DIR)/userland/bin/donut.c $(CRT0_O) $(LIBC_SO) $
 	@$(LD) $(USER_LDFLAGS) -pie $(CRT0_O) $(BUILD_DIR)/userland/bin/donut.o $(LIBM_SO) $(LIBC_SO) -o $@
 
 # X11 Desktop Environment (szpontdesktop)
-$(ROOTFS_DIR)/bin/szpontdesktop: $(ROOT_DIR)/userland/bin/szpontdesktop.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so $(ROOTFS_DIR)/lib/libXext.so | $(ROOTFS_DIR)
+$(ROOTFS_DIR)/bin/szpontdesktop: $(ROOT_DIR)/userland/bin/szpontdesktop.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) $(ROOTFS_DIR)/lib/libX11.so $(ROOTFS_DIR)/lib/libXext.so | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(BUILD_DIR)/userland/bin
 	@echo "  [CC-SZPONTDESKTOP] $<"
 	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/szpontdesktop.d -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -I$(ROOT_DIR)/third_party/stb -c $< -o $(BUILD_DIR)/userland/bin/szpontdesktop.o
@@ -106,7 +106,7 @@ $(ROOTFS_DIR)/bin/szpontdesktop: $(ROOT_DIR)/userland/bin/szpontdesktop.c $(CRT0
 	@chmod +x $@
 
 # Native X11 Terminal Emulator (szponterm)
-$(ROOTFS_DIR)/bin/szponterm: $(ROOT_DIR)/userland/bin/szponterm.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libX11.so | $(ROOTFS_DIR)
+$(ROOTFS_DIR)/bin/szponterm: $(ROOT_DIR)/userland/bin/szponterm.c $(CRT0_O) $(LIBC_SO) $(LIBM_SO) $(ROOTFS_DIR)/lib/libX11.so | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(BUILD_DIR)/userland/bin
 	@echo "  [CC-SZPONTERM] $<"
 	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/szponterm.d -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -c $< -o $(BUILD_DIR)/userland/bin/szponterm.o
@@ -115,7 +115,7 @@ $(ROOTFS_DIR)/bin/szponterm: $(ROOT_DIR)/userland/bin/szponterm.c $(CRT0_O) $(LI
 	@chmod +x $@
 
 # X11 Session Launcher (startx)
-$(ROOTFS_DIR)/bin/startx: $(ROOT_DIR)/userland/bin/startx.c $(CRT0_O) $(LIBC_SO) $(SYSROOT_STAMP) | $(ROOTFS_DIR)
+$(ROOTFS_DIR)/bin/startx: $(ROOT_DIR)/userland/bin/startx.c $(CRT0_O) $(LIBC_SO) | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(BUILD_DIR)/userland/bin
 	@echo "  [CC-STARTX] $<"
 	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/startx.d -c $< -o $(BUILD_DIR)/userland/bin/startx.o
@@ -124,7 +124,7 @@ $(ROOTFS_DIR)/bin/startx: $(ROOT_DIR)/userland/bin/startx.c $(CRT0_O) $(LIBC_SO)
 	@chmod +x $@
 
 # cURL Diagnostic Test Tool
-$(ROOTFS_DIR)/bin/curltest: $(ROOT_DIR)/userland/bin/curltest.c $(CRT0_O) $(LIBC_SO) $(SYSROOT_STAMP) $(ROOTFS_DIR)/lib/libcurl.so | $(ROOTFS_DIR)
+$(ROOTFS_DIR)/bin/curltest: $(ROOT_DIR)/userland/bin/curltest.c $(CRT0_O) $(LIBC_SO) $(ROOTFS_DIR)/lib/libcurl.so | $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(BUILD_DIR)/userland/bin
 	@echo "  [CC-CURLTEST] $<"
 	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/curltest.d -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -c $< -o $(BUILD_DIR)/userland/bin/curltest.o

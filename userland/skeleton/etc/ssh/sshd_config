@@ -1,0 +1,24 @@
+# /etc/ssh/sshd_config -- SzpontOS OpenSSH Daemon Configuration
+# (C) Copyright by Szpont Industries. All rights reserved.
+
+Port 22
+AddressFamily inet
+ListenAddress 0.0.0.0
+
+# Host Keys
+HostKey /etc/ssh/ssh_host_rsa_key
+HostKey /etc/ssh/ssh_host_ecdsa_key
+HostKey /etc/ssh/ssh_host_ed25519_key
+
+# Authentication
+PermitRootLogin yes
+PermitEmptyPasswords yes
+PubkeyAuthentication yes
+PasswordAuthentication yes
+AuthorizedKeysFile .ssh/authorized_keys
+
+LogLevel INFO
+StrictModes no
+Subsystem sftp /usr/libexec/sftp-server
+PrintMotd yes
+TCPKeepAlive yes

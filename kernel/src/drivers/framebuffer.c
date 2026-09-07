@@ -11,6 +11,7 @@
 #include <mm/pmm.h>
 #include <mm/vmm.h>
 #include <arch/x86_64/io.h>
+#include <drivers/keyboard.h>
 
 static struct limine_framebuffer *g_fb = NULL;
 static uint32_t *g_fb_ptr = NULL;
@@ -863,6 +864,18 @@ static void handle_csi_command(char cmd) {
                     g_in_alt_screen = false;
                 }
             }
+        } else if (cmd == 'n') {
+            if (mode == 6) {
+                /* DECCPR (Cursor Position Report) */
+                char cpr[32];
+                ksnprintf(cpr, sizeof(cpr), "\033[%d;%dR", (int)g_cursor_y + 1, (int)g_cursor_x + 1);
+                keyboard_push_str(cpr);
+            } else if (mode == 5) {
+                keyboard_push_str("\033[0n");
+            }
+        } else if (cmd == 'c') {
+            /* Secondary Device Attributes (DA2) */
+            keyboard_push_str("\033[>0;10;0c");
         }
         return;
     }
@@ -1099,6 +1112,43 @@ static void handle_csi_command(char cmd) {
         break;
     }
 
+    case 'n': {
+        int mode = (g_ansi_param_count > 0) ? g_ansi_params[0] : 0;
+        if (mode == 6) {
+            /* CPR (Cursor Position Report): \033[<row>;<col>R (1-indexed) */
+            char cpr[32];
+            ksnprintf(cpr, sizeof(cpr), "\033[%d;%dR", (int)g_cursor_y + 1, (int)g_cursor_x + 1);
+            keyboard_push_str(cpr);
+        } else if (mode == 5) {
+            /* Status report: OK -> \033[0n */
+            keyboard_push_str("\033[0n");
+        }
+        break;
+    }
+
+    case 'c': {
+        /* Primary Device Attributes (DA1): \033[?1;2c (VT100 with AVO) */
+        keyboard_push_str("\033[?1;2c");
+        break;
+    }
+
+    case 't': {
+        /* Window manipulation / size query */
+        int mode = (g_ansi_param_count > 0) ? g_ansi_params[0] : 0;
+        if (mode == 18) {
+            /* Report size in characters: \033[8;<rows>;<cols>t */
+            char buf[32];
+            ksnprintf(buf, sizeof(buf), "\033[8;%d;%dt", (int)g_rows, (int)g_cols);
+            keyboard_push_str(buf);
+        } else if (mode == 14) {
+            /* Report size in pixels: \033[4;<height>;<width>t */
+            char buf[32];
+            ksnprintf(buf, sizeof(buf), "\033[4;%d;%dt", (int)g_fb_height, (int)g_fb_width);
+            keyboard_push_str(buf);
+        }
+        break;
+    }
+
     default:
         break;
     }
@@ -1260,7 +1310,7 @@ static void fb_console_putc_internal(char c) {
         }
         return;
     } else if (g_ansi_state == ANSI_STATE_CSI) {
-        if (c == '?') {
+        if (c == '?' || c == '>') {
             g_ansi_private = true;
             return;
         } else if (c >= '0' && c <= '9') {

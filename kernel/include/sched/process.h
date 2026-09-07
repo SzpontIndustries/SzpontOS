@@ -18,6 +18,8 @@ typedef struct process {
     pid_t ppid;
     pid_t pgid;
     pid_t sid;
+    bool has_ctty;
+    vfs_node_t *ctty;
 
     uid_t uid;
     gid_t gid;
@@ -82,6 +84,7 @@ int process_send_signal(process_t *proc, int sig);
 int process_kill(pid_t pid, int sig);
 process_t *process_get_foreground(void);
 void process_set_foreground(process_t *proc);
+void process_signal_ctty(vfs_node_t *ctty_node, int sig);
 void process_check_signals(void);
 size_t process_get_list(proc_info_t *buf, size_t max_count);
 
@@ -96,5 +99,6 @@ int process_getgroups(size_t size, gid_t *list);
 int process_sigaction(int sig, const struct sigaction *act, struct sigaction *oldact);
 int process_sigprocmask(int how, const sigset_t *set, sigset_t *oldset);
 int process_sigpending(sigset_t *set);
+void process_close_all_fds(process_t *proc);
 
 #endif /* SZPONTOS_SCHED_PROCESS_H */

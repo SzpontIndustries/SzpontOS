@@ -8,6 +8,7 @@ LIBC_C_SRCS := \
     $(ROOT_DIR)/libc/src/stdlib/atexit.c \
     $(ROOT_DIR)/libc/src/stdlib/locale.c \
     $(ROOT_DIR)/libc/src/stdlib/system.c \
+    $(ROOT_DIR)/libc/src/stdlib/crypt.c \
     $(ROOT_DIR)/libc/src/stdio/printf.c \
     $(ROOT_DIR)/libc/src/stdio/err.c \
     $(ROOT_DIR)/libc/src/signal/siglist.c \
@@ -16,8 +17,10 @@ LIBC_C_SRCS := \
     $(ROOT_DIR)/libc/src/unistd/sysconf.c \
     $(ROOT_DIR)/libc/src/unistd/sendfile.c \
     $(ROOT_DIR)/libc/src/unistd/uio.c \
+    $(ROOT_DIR)/libc/src/unistd/daemon.c \
     $(ROOT_DIR)/libc/src/dirent/dirent.c \
     $(ROOT_DIR)/libc/src/pwd/pwd.c \
+    $(ROOT_DIR)/libc/src/pwd/shadow.c \
     $(ROOT_DIR)/libc/src/grp/grp.c \
     $(ROOT_DIR)/libc/src/dlfcn/dlfcn.c \
     $(ROOT_DIR)/libc/src/ctype/ctype.c \

@@ -32,5 +32,6 @@ typedef struct tss_entry tss_entry_t;
 void gdt_init(void);
 void gdt_set_kernel_stack(uintptr_t stack);
 void fpu_init(void);
+extern uint8_t g_default_fpu_state[512] __attribute__((aligned(16)));
 
 #endif /* SZPONTOS_ARCH_X86_64_GDT_H */

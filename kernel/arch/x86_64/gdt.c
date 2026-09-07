@@ -113,6 +113,8 @@ void gdt_set_kernel_stack(uintptr_t stack) {
     g_current_kernel_stack = stack;
 }
 
+uint8_t g_default_fpu_state[512] __attribute__((aligned(16)));
+
 void fpu_init(void) {
     uint64_t cr0 = read_cr0();
     cr0 &= ~(1ULL << 2); /* Clear EM */
@@ -126,5 +128,9 @@ void fpu_init(void) {
     write_cr4(cr4);
 
     __asm__ volatile("fninit");
+    uint32_t mxcsr = 0x1F80;
+    __asm__ volatile("ldmxcsr %0" : : "m"(mxcsr));
+    __asm__ volatile("fxsave64 %0" : "=m"(g_default_fpu_state));
+
     klog_info("FPU & SSE / AVX SIMD instructions enabled (CR0 & CR4 configured)");
 }

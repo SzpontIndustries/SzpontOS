@@ -25,6 +25,7 @@
 #include <sys/wait.h>
 #include <sys/stat.h>
 #include <sys/reboot.h>
+#include <sys/ioctl.h>
 
 #define COLOR_RESET   "\033[0m"
 #define COLOR_BOLD    "\033[1m"
@@ -127,6 +128,7 @@ static pid_t start_session(session_t *sp) {
 
         int fd = open(devpath, O_RDWR);
         if (fd >= 0) {
+            ioctl(fd, TIOCSCTTY, 0);
             dup2(fd, STDIN_FILENO);
             dup2(fd, STDOUT_FILENO);
             dup2(fd, STDERR_FILENO);
@@ -316,6 +318,7 @@ static init_state_t state_single_user(void) {
         setsid();
         int fd = open(PATH_CONSOLE, O_RDWR);
         if (fd >= 0) {
+            ioctl(fd, TIOCSCTTY, 0);
             dup2(fd, STDIN_FILENO);
             dup2(fd, STDOUT_FILENO);
             dup2(fd, STDERR_FILENO);
@@ -356,6 +359,7 @@ static init_state_t state_runcom(void) {
         setsid();
         int fd = open(PATH_CONSOLE, O_RDWR);
         if (fd >= 0) {
+            ioctl(fd, TIOCSCTTY, 0);
             dup2(fd, STDIN_FILENO);
             dup2(fd, STDOUT_FILENO);
             dup2(fd, STDERR_FILENO);

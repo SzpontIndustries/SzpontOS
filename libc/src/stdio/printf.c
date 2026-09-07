@@ -943,6 +943,49 @@ int vsscanf(const char *str, const char *format, va_list ap) {
             count++;
             break;
         }
+        case '[': {
+            f++;
+            int invert = 0;
+            if (*f == '^') {
+                invert = 1;
+                f++;
+            }
+            unsigned char set[256] = {0};
+            if (*f == ']') {
+                set[(unsigned char)*f++] = 1;
+            }
+            while (*f && *f != ']') {
+                if (*f == '-' && *(f - 1) != '[' && *(f + 1) != ']' && *(f + 1) != '\0') {
+                    unsigned char start = (unsigned char)*(f - 1);
+                    unsigned char end = (unsigned char)*(f + 1);
+                    for (unsigned int c = start; c <= end; c++) {
+                        set[(unsigned char)c] = 1;
+                    }
+                    f += 2;
+                } else {
+                    set[(unsigned char)*f++] = 1;
+                }
+            }
+            char *p = va_arg(ap, char *);
+            int i = 0;
+            while (*s) {
+                unsigned char c = (unsigned char)*s;
+                if (invert) {
+                    if (set[c])
+                        break;
+                } else {
+                    if (!set[c])
+                        break;
+                }
+                p[i++] = *s++;
+            }
+            p[i] = '\0';
+            if (i > 0)
+                count++;
+            else
+                return count;
+            break;
+        }
         default:
             return count;
         }

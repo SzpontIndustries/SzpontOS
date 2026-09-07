@@ -16,6 +16,7 @@
 #define O_RDWR 0x0002
 #define O_CREAT 0x0040
 #define O_EXCL 0x0080
+#define O_NOCTTY 0x0100
 #define O_TRUNC 0x0200
 #define O_APPEND 0x0400
 
@@ -110,5 +111,7 @@ ssize_t vfs_write(int fd, const void *buf, size_t count);
 off_t vfs_lseek(int fd, off_t offset, int whence);
 int vfs_chmod(const char *path, mode_t mode);
 int vfs_chown(const char *path, uid_t uid, gid_t gid);
+/* File descriptor lifecycle */
+void fd_release(file_descriptor_t *f);
 
 #endif /* SZPONTOS_FS_VFS_H */

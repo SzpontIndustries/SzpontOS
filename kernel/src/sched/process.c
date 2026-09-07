@@ -11,6 +11,7 @@
 #include <kernel/string.h>
 #include <kernel/kprint.h>
 #include <kernel/spinlock.h>
+#include <arch/x86_64/gdt.h>
 
 #define KERNEL_STACK_SIZE (16 * 1024)
 
@@ -59,6 +60,30 @@ void process_set_foreground(process_t *proc) {
     spinlock_release(&g_process_lock);
 }
 
+void process_signal_ctty(vfs_node_t *ctty_node, int sig) {
+    if (!ctty_node || sig < 0 || sig >= 32)
+        return;
+
+    process_t *targets[32];
+    size_t count = 0;
+
+    spinlock_acquire(&g_process_lock);
+    list_node_t *pos;
+    list_for_each(pos, &g_process_list) {
+        process_t *item = container_of(pos, process_t, proc_list_node);
+        if (item->status == PROCESS_ACTIVE && item->has_ctty && item->ctty == ctty_node) {
+            if (count < 32) {
+                targets[count++] = item;
+            }
+        }
+    }
+    spinlock_release(&g_process_lock);
+
+    for (size_t i = 0; i < count; i++) {
+        process_send_signal(targets[i], sig);
+    }
+}
+
 process_t *process_create(const char *name) {
     spinlock_acquire(&g_process_lock);
 
@@ -96,6 +121,8 @@ process_t *process_create(const char *name) {
 
     /* Open default standard streams if VFS is initialized */
     vfs_node_t *tty = vfs_lookup("/dev/tty");
+    proc->has_ctty = true;
+    proc->ctty = tty;
     if (tty) {
         for (int i = 0; i < 3; i++) {
             proc->fds[i] = (file_descriptor_t *)kzalloc(sizeof(file_descriptor_t));
@@ -120,6 +147,7 @@ thread_t *thread_create(process_t *proc, void (*entry_point)(void), bool is_user
     t->tid = g_next_tid++;
     t->process = proc;
     t->state = THREAD_READY;
+    memcpy(t->fpu_state, g_default_fpu_state, 512);
 
     /* Allocate 16 KiB kernel stack */
     size_t stack_pages = KERNEL_STACK_SIZE / PAGE_SIZE;
@@ -189,6 +217,19 @@ void thread_exit(int exit_code) {
     sched_yield();
 }
 
+void process_close_all_fds(process_t *proc) {
+    if (!proc)
+        return;
+    for (int i = 0; i < MAX_FD; i++) {
+        if (proc->fds[i]) {
+            file_descriptor_t *f = proc->fds[i];
+            proc->fds[i] = NULL;
+            proc->fd_cloexec[i] = false;
+            fd_release(f);
+        }
+    }
+}
+
 void process_exit(int exit_code) {
     process_t *proc = sched_get_current_process();
     if (!proc)
@@ -196,6 +237,9 @@ void process_exit(int exit_code) {
 
     /* Detach all active shared memory mappings */
     shm_process_exit(proc);
+
+    /* Close all open file descriptors so pipe/socket peers receive EOF/HUP immediately */
+    process_close_all_fds(proc);
 
     proc->status = PROCESS_ZOMBIE;
     proc->exit_code = exit_code;
@@ -236,6 +280,7 @@ void process_exit(int exit_code) {
     list_for_each(pos, &proc->threads) {
         thread_t *t = container_of(pos, thread_t, proc_node);
         t->state = THREAD_ZOMBIE;
+        sched_remove_thread(t);
     }
 
     sched_yield();
@@ -365,6 +410,8 @@ pid_t process_setsid(void) {
 
     curr->sid = curr->pid;
     curr->pgid = curr->pid;
+    curr->has_ctty = false;
+    curr->ctty = NULL;
     spinlock_release(&g_process_lock);
     return curr->sid;
 }
@@ -588,30 +635,7 @@ pid_t process_waitpid(pid_t pid, int *status, int options) {
                         }
 
                         /* Free child resources */
-                        for (int i = 0; i < MAX_FD; i++) {
-                            if (p->fds[i]) {
-                                file_descriptor_t *f = p->fds[i];
-                                p->fds[i] = NULL;
-                                f->refcount--;
-                                if (f->refcount == 0) {
-                                    if (f->node && (f->node->flags == VFS_TYPE_PIPE) && f->node->device_data) {
-                                        pipe_chan_t *chan = (pipe_chan_t *)f->node->device_data;
-                                        if (f->flags & O_WRONLY) {
-                                            chan->writers--;
-                                        } else {
-                                            chan->readers--;
-                                        }
-                                        if (chan->readers <= 0 && chan->writers <= 0) {
-                                            kfree(chan);
-                                        }
-                                        f->node->device_data = NULL;
-                                        kfree(f->node);
-                                        f->node = NULL;
-                                    }
-                                    kfree(f);
-                                }
-                            }
-                        }
+                        process_close_all_fds(p);
 
                         /* Free child threads and their kernel stacks */
                         list_node_t *tpos, *tnext;

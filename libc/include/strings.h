@@ -13,10 +13,15 @@ int strncasecmp(const char *s1, const char *s2, size_t n);
 int ffs(int i);
 int ffsl(long int i);
 
-#define bcmp(s1, s2, n) memcmp((s1), (s2), (size_t)(n))
-#define bcopy(src, dst, n) memcpy((dst), (src), (size_t)(n))
-#define bzero(s, n) memset((s), 0, (size_t)(n))
-#define index(s, c) strchr((s), (c))
-#define rindex(s, c) strrchr((s), (c))
+#undef bcmp
+int bcmp(const void *s1, const void *s2, size_t n);
+#undef bcopy
+void bcopy(const void *src, void *dst, size_t n);
+#undef bzero
+void bzero(void *s, size_t n);
+#undef index
+char *index(const char *s, int c);
+#undef rindex
+char *rindex(const char *s, int c);
 
 #endif /* _STRINGS_H */

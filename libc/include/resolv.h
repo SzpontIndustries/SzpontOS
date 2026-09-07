@@ -42,6 +42,17 @@ typedef struct __res_state *res_state;
 
 extern struct __res_state _res;
 
+#define RES_INIT        0x00000001
+#define RES_DEBUG       0x00000002
+#define RES_AAONLY      0x00000004
+#define RES_USEVC       0x00000008
+#define RES_PRIMARY     0x00000010
+#define RES_IGNTC       0x00000020
+#define RES_RECURSE     0x00000040
+#define RES_DEFNAMES    0x00000080
+#define RES_STAYOPEN    0x00000100
+#define RES_DNSRCH      0x00000200
+
 /* Resolver function prototypes */
 int res_init(void);
 int res_query(const char *dname, int class, int type, unsigned char *answer, int anslen);
@@ -51,6 +62,8 @@ int res_mkquery(int op, const char *dname, int class, int type,
                 const unsigned char *newrr_in,
                 unsigned char *buf, int buflen);
 int res_send(const unsigned char *msg, int msglen, unsigned char *answer, int anslen);
+int dn_expand(const unsigned char *msg, const unsigned char *eomorig,
+              const unsigned char *comp_dn, char *exp_dn, int length);
 void res_close(void);
 
 #endif /* !_RESOLV_H_ */
