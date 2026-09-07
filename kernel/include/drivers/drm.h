@@ -29,6 +29,7 @@ typedef struct drm_dumb_bo {
     uintptr_t *phys_pages;
     void *kernel_virt;
     uint64_t mmap_offset;
+    int refcount;
     bool allocated;
     bool is_direct_vram;
 } drm_dumb_bo_t;
@@ -40,6 +41,7 @@ typedef struct drm_fb {
     uint32_t pitch;
     uint32_t bpp;
     uint32_t depth;
+    uint32_t pixel_format;
     uint32_t bo_handle;
     bool allocated;
 } drm_fb_t;
@@ -69,8 +71,27 @@ typedef struct drm_encoder_state {
     uint32_t possible_crtcs;
 } drm_encoder_state_t;
 
+#define DRM_MAX_EVENTS 32
+typedef struct drm_event_queue {
+    struct drm_event_vblank events[DRM_MAX_EVENTS];
+    size_t head;
+    size_t tail;
+    size_t count;
+} drm_event_queue_t;
+
+#define DRM_MAX_SYNCOBJS 64
+typedef struct drm_syncobj {
+    uint32_t handle;
+    bool allocated;
+    bool signaled;
+} drm_syncobj_t;
+
 void drm_init(void);
 int drm_ioctl(uint64_t request, void *argp);
+int drm_render_ioctl(uint64_t request, void *argp);
 int drm_mmap(void *addr, size_t length, int prot, int flags, off_t offset, void **out_vaddr);
+ssize_t drm_read(void *buffer, size_t size);
+bool drm_has_events(void);
+bool drm_is_dmabuf_node(vfs_node_t *node);
 
 #endif /* SZPONTOS_DRIVERS_DRM_H */

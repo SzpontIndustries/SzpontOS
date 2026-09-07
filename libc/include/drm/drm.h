@@ -130,8 +130,71 @@ struct drm_prime_handle {
     int32_t fd;
 };
 
-#define DRM_IOCTL_PRIME_HANDLE_TO_FD DRM_IOWR(0x2d, struct drm_prime_handle)
-#define DRM_IOCTL_PRIME_FD_TO_HANDLE DRM_IOWR(0x2e, struct drm_prime_handle)
+struct drm_gem_close {
+    uint32_t handle;
+    uint32_t pad;
+};
+
+#define DRM_IOCTL_GEM_CLOSE             DRM_IOW(0x09, struct drm_gem_close)
+#define DRM_IOCTL_PRIME_HANDLE_TO_FD    DRM_IOWR(0x2d, struct drm_prime_handle)
+#define DRM_IOCTL_PRIME_FD_TO_HANDLE    DRM_IOWR(0x2e, struct drm_prime_handle)
+
+#define DRM_SYNCOBJ_FD_TO_HANDLE_FLAGS_IMPORT_SYNC_FILE (1 << 0)
+#define DRM_SYNCOBJ_HANDLE_TO_FD_FLAGS_EXPORT_SYNC_FILE (1 << 0)
+#define DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL                (1 << 0)
+#define DRM_SYNCOBJ_WAIT_FLAGS_WAIT_FOR_SUBMIT         (1 << 1)
+#define DRM_SYNCOBJ_WAIT_FLAGS_WAIT_AVAILABLE          (1 << 2)
+#define DRM_SYNCOBJ_WAIT_FLAGS_WAIT_DEADLINE           (1 << 3)
+
+struct drm_syncobj_create {
+    uint32_t handle;
+    uint32_t flags;
+};
+
+struct drm_syncobj_destroy {
+    uint32_t handle;
+    uint32_t pad;
+};
+
+struct drm_syncobj_handle {
+    uint32_t handle;
+    uint32_t flags;
+    int32_t fd;
+    uint32_t pad;
+};
+
+struct drm_syncobj_wait {
+    uint64_t handles;
+    int64_t timeout_nsec;
+    uint32_t count_handles;
+    uint32_t flags;
+    uint32_t first_signaled;
+    uint32_t pad;
+    uint64_t deadline_nsec;
+};
+
+#define DRM_EVENT_VBLANK        0x01
+#define DRM_EVENT_FLIP_COMPLETE 0x02
+
+struct drm_event {
+    uint32_t type;
+    uint32_t length;
+};
+
+struct drm_event_vblank {
+    struct drm_event base;
+    uint64_t user_data;
+    uint32_t tv_sec;
+    uint32_t tv_usec;
+    uint32_t sequence;
+    uint32_t crtc_id;
+};
+
+#define DRM_IOCTL_SYNCOBJ_CREATE        DRM_IOWR(0xbf, struct drm_syncobj_create)
+#define DRM_IOCTL_SYNCOBJ_DESTROY       DRM_IOWR(0xc0, struct drm_syncobj_destroy)
+#define DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD  DRM_IOWR(0xc1, struct drm_syncobj_handle)
+#define DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE  DRM_IOWR(0xc2, struct drm_syncobj_handle)
+#define DRM_IOCTL_SYNCOBJ_WAIT          DRM_IOWR(0xc3, struct drm_syncobj_wait)
 
 #include <drm/drm_mode.h>
 

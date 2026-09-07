@@ -502,8 +502,22 @@ int drmModeRevokeLease(int fd, uint32_t lessee_id) {
 }
 
 int drmHandleEvent(int fd, drmEventContextPtr evctx) {
-    (void)fd;
-    (void)evctx;
+    if (!evctx)
+        return -EINVAL;
+
+    char buf[sizeof(struct drm_event_vblank) + 32];
+    ssize_t len = read(fd, buf, sizeof(buf));
+    if (len <= 0)
+        return (len < 0) ? -errno : 0;
+
+    struct drm_event *base = (struct drm_event *)buf;
+    if (base->type == DRM_EVENT_VBLANK && evctx->version >= 1 && evctx->vblank_handler) {
+        struct drm_event_vblank *ev = (struct drm_event_vblank *)buf;
+        evctx->vblank_handler(fd, ev->sequence, ev->tv_sec, ev->tv_usec, (void *)(uintptr_t)ev->user_data);
+    } else if (base->type == DRM_EVENT_FLIP_COMPLETE && evctx->version >= 2 && evctx->page_flip_handler) {
+        struct drm_event_vblank *ev = (struct drm_event_vblank *)buf;
+        evctx->page_flip_handler(fd, ev->sequence, ev->tv_sec, ev->tv_usec, (void *)(uintptr_t)ev->user_data);
+    }
     return 0;
 }
 
@@ -690,5 +704,139 @@ int drmCrtcQueueSequence(int fd, uint32_t crtcId, uint32_t flags, uint64_t seque
 
 void osPciInit(void) {
     /* SzpontOS initializes PCI buses during kernel boot */
+}
+
+int drmGetNodeTypeFromFd(int fd) {
+    (void)fd;
+    return DRM_NODE_PRIMARY;
+}
+
+char *drmGetRenderDeviceNameFromFd(int fd) {
+    (void)fd;
+    return strdup("/dev/dri/renderD128");
+}
+
+int drmGetDevice2(int fd, uint32_t flags, drmDevicePtr *device) {
+    (void)fd;
+    (void)flags;
+    if (!device) return -EINVAL;
+
+    drmDevicePtr dev = (drmDevicePtr)calloc(1, sizeof(drmDevice));
+    if (!dev) return -ENOMEM;
+
+    dev->nodes = (char **)calloc(DRM_NODE_MAX, sizeof(char *));
+    if (!dev->nodes) {
+        free(dev);
+        return -ENOMEM;
+    }
+
+    dev->nodes[DRM_NODE_PRIMARY] = strdup("/dev/dri/card0");
+    dev->nodes[DRM_NODE_RENDER] = strdup("/dev/dri/renderD128");
+    dev->available_nodes = (1 << DRM_NODE_PRIMARY) | (1 << DRM_NODE_RENDER);
+    dev->bustype = DRM_BUS_PCI;
+
+    dev->businfo.pci.domain = 0;
+    dev->businfo.pci.bus = 0;
+    dev->businfo.pci.dev = 1;
+    dev->businfo.pci.func = 0;
+
+    dev->deviceinfo.pci.vendor_id = 0x1234;
+    dev->deviceinfo.pci.device_id = 0x1111;
+
+    *device = dev;
+    return 0;
+}
+
+int drmGetDevices2(uint32_t flags, drmDevicePtr devices[], int max_devices) {
+    if (!devices || max_devices <= 0)
+        return 0;
+
+    drmDevicePtr dev = NULL;
+    if (drmGetDevice2(-1, flags, &dev) == 0) {
+        devices[0] = dev;
+        return 1;
+    }
+    return 0;
+}
+
+void drmFreeDevice(drmDevicePtr *device) {
+    if (!device || !*device) return;
+    drmDevicePtr dev = *device;
+    if (dev->nodes) {
+        for (int i = 0; i < DRM_NODE_MAX; i++) {
+            if (dev->nodes[i]) free(dev->nodes[i]);
+        }
+        free(dev->nodes);
+    }
+    free(dev);
+    *device = NULL;
+}
+
+void drmFreeDevices(drmDevicePtr devices[], int count) {
+    if (!devices) return;
+    for (int i = 0; i < count; i++) {
+        drmDevicePtr dev = devices[i];
+        if (dev) {
+            drmFreeDevice(&dev);
+            devices[i] = NULL;
+        }
+    }
+}
+
+int drmSyncobjCreate(int fd, uint32_t flags, uint32_t *handle) {
+    if (!handle) return -EINVAL;
+    struct drm_syncobj_create req;
+    memset(&req, 0, sizeof(req));
+    req.flags = flags;
+    int ret = ioctl(fd, DRM_IOCTL_SYNCOBJ_CREATE, &req);
+    if (ret == 0) {
+        *handle = req.handle;
+    }
+    return ret;
+}
+
+int drmSyncobjDestroy(int fd, uint32_t handle) {
+    struct drm_syncobj_destroy req;
+    memset(&req, 0, sizeof(req));
+    req.handle = handle;
+    return ioctl(fd, DRM_IOCTL_SYNCOBJ_DESTROY, &req);
+}
+
+int drmSyncobjHandleToFD(int fd, uint32_t handle, int *obj_fd) {
+    if (!obj_fd) return -EINVAL;
+    struct drm_syncobj_handle req;
+    memset(&req, 0, sizeof(req));
+    req.handle = handle;
+    int ret = ioctl(fd, DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD, &req);
+    if (ret == 0) {
+        *obj_fd = req.fd;
+    }
+    return ret;
+}
+
+int drmSyncobjFDToHandle(int fd, int obj_fd, uint32_t *handle) {
+    if (!handle) return -EINVAL;
+    struct drm_syncobj_handle req;
+    memset(&req, 0, sizeof(req));
+    req.fd = obj_fd;
+    int ret = ioctl(fd, DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE, &req);
+    if (ret == 0) {
+        *handle = req.handle;
+    }
+    return ret;
+}
+
+int drmSyncobjWait(int fd, uint32_t *handles, uint32_t num_handles, int64_t timeout_nsec, uint32_t flags, uint32_t *first_signaled) {
+    struct drm_syncobj_wait req;
+    memset(&req, 0, sizeof(req));
+    req.handles = (uint64_t)(uintptr_t)handles;
+    req.count_handles = num_handles;
+    req.timeout_nsec = timeout_nsec;
+    req.flags = flags;
+    int ret = ioctl(fd, DRM_IOCTL_SYNCOBJ_WAIT, &req);
+    if (ret == 0 && first_signaled) {
+        *first_signaled = req.first_signaled;
+    }
+    return ret;
 }
 

@@ -12,6 +12,7 @@
 #include <kernel/string.h>
 #include <kernel/kprint.h>
 #include <kernel/spinlock.h>
+#include <drivers/drm.h>
 
 extern int tcp_send_segment(uint32_t src_ip, uint16_t src_port, uint32_t dest_ip, uint16_t dest_port, uint32_t seq,
                             uint32_t ack, uint8_t flags, const void *data, size_t len);
@@ -242,6 +243,13 @@ void socket_destroy(socket_t *sock) {
         }
     }
     spinlock_release(&g_socket_list_lock);
+
+    for (size_t i = 0; i < sock->passed_fd_count; i++) {
+        if (sock->passed_fds[i]) {
+            kfree(sock->passed_fds[i]);
+            sock->passed_fds[i] = NULL;
+        }
+    }
 
     kfree(sock);
 }
@@ -966,4 +974,122 @@ int sys_socketpair(int domain, int type, int protocol, int sv[2]) {
     sv[0] = fd1;
     sv[1] = fd2;
     return 0;
+}
+
+ssize_t sys_sendmsg(int fd, const struct msghdr *msg, int flags) {
+    if (!msg || (msg->msg_iovlen > 0 && !msg->msg_iov))
+        return -22; /* EINVAL */
+
+    socket_t *sock = get_socket_from_fd(fd);
+    if (!sock)
+        return -9; /* EBADF */
+
+    process_t *proc = sched_get_current_process();
+    if (!proc)
+        return -1;
+
+    /* Handle SCM_RIGHTS file descriptor passing for AF_UNIX */
+    if (sock->domain == AF_UNIX && sock->peer && msg->msg_control && msg->msg_controllen >= sizeof(struct cmsghdr)) {
+        struct cmsghdr *cmsg = (struct cmsghdr *)msg->msg_control;
+        if (cmsg->cmsg_level == SOL_SOCKET && cmsg->cmsg_type == SCM_RIGHTS) {
+            size_t data_len = (cmsg->cmsg_len > sizeof(struct cmsghdr)) ? (cmsg->cmsg_len - sizeof(struct cmsghdr)) : 0;
+            size_t num_fds = data_len / sizeof(int);
+            const int *fds = (const int *)CMSG_DATA(cmsg);
+
+            spinlock_acquire(&sock->peer->lock);
+            for (size_t i = 0; i < num_fds && sock->peer->passed_fd_count < UNIX_MAX_PASSED_FDS; i++) {
+                int send_fd = fds[i];
+                if (send_fd >= 0 && send_fd < MAX_FD && proc->fds[send_fd]) {
+                    file_descriptor_t *src_f = proc->fds[send_fd];
+                    src_f->refcount++;
+                    sock->peer->passed_fds[sock->peer->passed_fd_count++] = src_f;
+                }
+            }
+            spinlock_release(&sock->peer->lock);
+        }
+    }
+
+    /* Send data chunks from msg_iov */
+    ssize_t total_sent = 0;
+    for (size_t i = 0; i < msg->msg_iovlen; i++) {
+        void *base = msg->msg_iov[i].iov_base;
+        size_t len = msg->msg_iov[i].iov_len;
+        if (len == 0)
+            continue;
+        ssize_t ret = sys_sendto(fd, base, len, flags, (const struct sockaddr *)msg->msg_name, msg->msg_namelen);
+        if (ret < 0) {
+            return (total_sent > 0) ? total_sent : ret;
+        }
+        total_sent += ret;
+    }
+
+    return total_sent;
+}
+
+ssize_t sys_recvmsg(int fd, struct msghdr *msg, int flags) {
+    if (!msg || (msg->msg_iovlen > 0 && !msg->msg_iov))
+        return -22; /* EINVAL */
+
+    socket_t *sock = get_socket_from_fd(fd);
+    if (!sock)
+        return -9; /* EBADF */
+
+    process_t *proc = sched_get_current_process();
+    if (!proc)
+        return -1;
+
+    /* Receive data chunks into msg_iov */
+    ssize_t total_recv = 0;
+    for (size_t i = 0; i < msg->msg_iovlen; i++) {
+        void *base = msg->msg_iov[i].iov_base;
+        size_t len = msg->msg_iov[i].iov_len;
+        if (len == 0)
+            continue;
+        ssize_t ret = sys_recvfrom(fd, base, len, flags, (struct sockaddr *)msg->msg_name, &msg->msg_namelen);
+        if (ret < 0) {
+            return (total_recv > 0) ? total_recv : ret;
+        }
+        total_recv += ret;
+    }
+
+    /* Deliver passed file descriptors if SCM_RIGHTS was queued */
+    if (sock->domain == AF_UNIX && msg->msg_control && msg->msg_controllen >= sizeof(struct cmsghdr)) {
+        spinlock_acquire(&sock->lock);
+        if (sock->passed_fd_count > 0) {
+            struct cmsghdr *cmsg = (struct cmsghdr *)msg->msg_control;
+            cmsg->cmsg_level = SOL_SOCKET;
+            cmsg->cmsg_type = SCM_RIGHTS;
+
+            int *out_fds = (int *)CMSG_DATA(cmsg);
+            size_t installed = 0;
+            for (size_t i = 0; i < sock->passed_fd_count; i++) {
+                file_descriptor_t *fdesc = sock->passed_fds[i];
+                sock->passed_fds[i] = NULL;
+                if (!fdesc)
+                    continue;
+
+                int free_slot = -1;
+                for (int slot = 0; slot < MAX_FD; slot++) {
+                    if (!proc->fds[slot]) {
+                        free_slot = slot;
+                        break;
+                    }
+                }
+                if (free_slot != -1) {
+                    proc->fds[free_slot] = fdesc;
+                    out_fds[installed++] = free_slot;
+                } else {
+                    fd_release(fdesc);
+                }
+            }
+            sock->passed_fd_count = 0;
+            cmsg->cmsg_len = (size_t)CMSG_LEN(sizeof(int) * installed);
+            msg->msg_controllen = (size_t)CMSG_SPACE(sizeof(int) * installed);
+        } else {
+            msg->msg_controllen = 0;
+        }
+        spinlock_release(&sock->lock);
+    }
+
+    return total_recv;
 }

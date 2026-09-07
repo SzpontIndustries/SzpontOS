@@ -71,7 +71,8 @@ CORE_PROGS := \
     $(ROOTFS_DIR)/bin/startx \
     $(ROOTFS_DIR)/bin/szpontdesktop \
     $(ROOTFS_DIR)/bin/szponterm \
-    $(ROOTFS_DIR)/bin/curltest
+    $(ROOTFS_DIR)/bin/curltest \
+    $(ROOTFS_DIR)/bin/mesadrmtest
 
 .PHONY: all progs
 

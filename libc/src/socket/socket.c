@@ -108,6 +108,24 @@ ssize_t recvfrom(int sockfd, void *buf, size_t len, int flags, struct sockaddr *
     return (ssize_t)ret;
 }
 
+ssize_t sendmsg(int sockfd, const struct msghdr *msg, int flags) {
+    int64_t ret = __syscall3(SYS_sendmsg, sockfd, (int64_t)msg, flags);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return (ssize_t)ret;
+}
+
+ssize_t recvmsg(int sockfd, struct msghdr *msg, int flags) {
+    int64_t ret = __syscall3(SYS_recvmsg, sockfd, (int64_t)msg, flags);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return (ssize_t)ret;
+}
+
 int setsockopt(int sockfd, int level, int optname, const void *optval, socklen_t optlen) {
     int64_t ret = __syscall5(SYS_setsockopt, sockfd, level, optname, (int64_t)optval, optlen);
     if (ret < 0) {

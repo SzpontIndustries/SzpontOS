@@ -31,6 +31,7 @@
 #include <drivers/tty.h>
 #include <drivers/evdev.h>
 #include <drivers/pty.h>
+#include <drivers/drm.h>
 
 struct pollfd {
     int fd;
@@ -2297,6 +2298,11 @@ static int kernel_sys_poll(struct pollfd *fds, unsigned int nfds, int timeout) {
                     fds[i].revents |= POLLIN;
                 if (fds[i].events & POLLOUT)
                     fds[i].revents |= POLLOUT;
+            } else if (strcmp(node->name, "card0") == 0 || strcmp(node->name, "renderD128") == 0 || strncmp(node->name, "dri/", 4) == 0) {
+                if ((fds[i].events & POLLIN) && drm_has_events())
+                    fds[i].revents |= POLLIN;
+                if (fds[i].events & POLLOUT)
+                    fds[i].revents |= POLLOUT;
             } else {
                 if (fds[i].events & POLLIN)
                     fds[i].revents |= POLLIN;
@@ -2579,6 +2585,10 @@ uint64_t syscall_dispatcher(uint64_t sys_no, uint64_t a1, uint64_t a2, uint64_t 
         return sys_sendto((int)a1, (const void *)a2, (size_t)a3, (int)a4, (const struct sockaddr *)a5, (uint32_t)a6);
     case SYS_recvfrom:
         return sys_recvfrom((int)a1, (void *)a2, (size_t)a3, (int)a4, (struct sockaddr *)a5, (uint32_t *)a6);
+    case SYS_sendmsg:
+        return sys_sendmsg((int)a1, (const struct msghdr *)a2, (int)a3);
+    case SYS_recvmsg:
+        return sys_recvmsg((int)a1, (struct msghdr *)a2, (int)a3);
     case SYS_shutdown:
         return sys_shutdown((int)a1, (int)a2);
     case SYS_bind:

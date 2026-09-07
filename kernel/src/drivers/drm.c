@@ -5,9 +5,11 @@
 
 #include <drivers/drm.h>
 #include <drivers/framebuffer.h>
+#include <drivers/rtc.h>
 #include <mm/heap.h>
 #include <mm/pmm.h>
 #include <mm/vmm.h>
+#include <mm/usercopy.h>
 #include <sched/process.h>
 #include <sched/sched.h>
 #include <kernel/string.h>
@@ -17,6 +19,15 @@
 static spinlock_t g_drm_lock = SPINLOCK_INIT;
 static drm_dumb_bo_t g_dumb_buffers[DRM_MAX_DUMB_BUFFERS];
 static drm_fb_t g_framebuffers[DRM_MAX_FBS];
+
+static drm_syncobj_t g_syncobjs[DRM_MAX_SYNCOBJS];
+static uint32_t g_next_syncobj_handle = 1;
+
+static drm_event_queue_t g_drm_events;
+static uint32_t g_vblank_sequence = 1;
+
+static vfs_ops_t g_dmabuf_ops;
+static vfs_ops_t g_syncfile_ops;
 
 static drm_crtc_state_t g_crtc;
 static drm_connector_state_t g_connector;
@@ -76,6 +87,8 @@ void drm_init(void) {
     spinlock_acquire(&g_drm_lock);
     memset(g_dumb_buffers, 0, sizeof(g_dumb_buffers));
     memset(g_framebuffers, 0, sizeof(g_framebuffers));
+    memset(g_syncobjs, 0, sizeof(g_syncobjs));
+    memset(&g_drm_events, 0, sizeof(g_drm_events));
 
     drm_setup_default_mode();
     g_drm_initialized = true;
@@ -167,7 +180,7 @@ static int drm_ioctl_get_cap(struct drm_get_cap *cap) {
         cap->value = 1;
         return 0;
     case DRM_CAP_PRIME:
-        cap->value = 0;
+        cap->value = DRM_PRIME_CAP_IMPORT | DRM_PRIME_CAP_EXPORT;
         return 0;
     case DRM_CAP_TIMESTAMP_MONOTONIC:
         cap->value = 1;
@@ -180,6 +193,21 @@ static int drm_ioctl_get_cap(struct drm_get_cap *cap) {
         return 0;
     case DRM_CAP_CURSOR_HEIGHT:
         cap->value = 64;
+        return 0;
+    case DRM_CAP_ADDFB2_MODIFIERS:
+        cap->value = 1;
+        return 0;
+    case DRM_CAP_PAGE_FLIP_TARGET:
+        cap->value = 1;
+        return 0;
+    case DRM_CAP_CRTC_IN_VBLANK_EVENT:
+        cap->value = 1;
+        return 0;
+    case DRM_CAP_SYNCOBJ:
+        cap->value = 1;
+        return 0;
+    case DRM_CAP_SYNCOBJ_TIMELINE:
+        cap->value = 0;
         return 0;
     default:
         cap->value = 0;
@@ -382,6 +410,7 @@ static int drm_ioctl_create_dumb(struct drm_mode_create_dumb *req) {
     }
     bo->kernel_virt = virt;
     bo->mmap_offset = ((uint64_t)bo->handle) << 12;
+    bo->refcount = 1;
     bo->allocated = true;
     bo->is_direct_vram = is_direct;
 
@@ -409,6 +438,23 @@ static int drm_ioctl_map_dumb(struct drm_mode_map_dumb *req) {
     return 0;
 }
 
+static int drm_bo_unref_locked(drm_dumb_bo_t *bo) {
+    if (!bo || !bo->allocated)
+        return -22;
+
+    bo->refcount--;
+    if (bo->refcount <= 0) {
+        if (bo->phys_pages) {
+            if (!bo->is_direct_vram && bo->phys_pages[0]) {
+                pmm_free_pages(bo->phys_pages[0], bo->num_pages);
+            }
+            kfree(bo->phys_pages);
+        }
+        memset(bo, 0, sizeof(drm_dumb_bo_t));
+    }
+    return 0;
+}
+
 static int drm_ioctl_destroy_dumb(struct drm_mode_destroy_dumb *req) {
     if (!req || req->handle == 0)
         return -22;
@@ -420,16 +466,25 @@ static int drm_ioctl_destroy_dumb(struct drm_mode_destroy_dumb *req) {
         return -22;
     }
 
-    if (bo->phys_pages) {
-        if (!bo->is_direct_vram && bo->phys_pages[0]) {
-            pmm_free_pages(bo->phys_pages[0], bo->num_pages);
-        }
-        kfree(bo->phys_pages);
-    }
-    memset(bo, 0, sizeof(drm_dumb_bo_t));
-
+    int ret = drm_bo_unref_locked(bo);
     spinlock_release(&g_drm_lock);
-    return 0;
+    return ret;
+}
+
+static int drm_ioctl_gem_close(struct drm_gem_close *req) {
+    if (!req || req->handle == 0)
+        return -22;
+
+    spinlock_acquire(&g_drm_lock);
+    drm_dumb_bo_t *bo = drm_find_bo(req->handle);
+    if (!bo) {
+        spinlock_release(&g_drm_lock);
+        return -22;
+    }
+
+    int ret = drm_bo_unref_locked(bo);
+    spinlock_release(&g_drm_lock);
+    return ret;
 }
 
 static int drm_ioctl_add_fb(struct drm_mode_fb_cmd *cmd) {
@@ -462,7 +517,68 @@ static int drm_ioctl_add_fb(struct drm_mode_fb_cmd *cmd) {
     fb->pitch = cmd->pitch;
     fb->bpp = cmd->bpp;
     fb->depth = cmd->depth;
+    fb->pixel_format = 0;
     fb->bo_handle = cmd->handle;
+    fb->allocated = true;
+
+    cmd->fb_id = fb->fb_id;
+    spinlock_release(&g_drm_lock);
+    return 0;
+}
+
+static int drm_ioctl_add_fb2(struct drm_mode_fb_cmd2 *cmd) {
+    if (!cmd || cmd->handles[0] == 0 || cmd->width == 0 || cmd->height == 0)
+        return -22;
+
+    uint32_t handle = cmd->handles[0];
+    uint32_t pitch = cmd->pitches[0];
+    uint32_t pixel_format = cmd->pixel_format;
+
+    uint32_t bpp = 32;
+    uint32_t depth = 24;
+    if (pixel_format == DRM_FORMAT_RGB565 || pixel_format == DRM_FORMAT_BGR565) {
+        bpp = 16;
+        depth = 16;
+    } else if (pixel_format == DRM_FORMAT_ARGB8888 || pixel_format == DRM_FORMAT_ABGR8888) {
+        bpp = 32;
+        depth = 32;
+    } else if (pixel_format == DRM_FORMAT_XRGB8888 || pixel_format == DRM_FORMAT_XBGR8888 || pixel_format == 0) {
+        bpp = 32;
+        depth = 24;
+    }
+
+    if (pitch == 0) {
+        pitch = ALIGN_UP(cmd->width * ((bpp + 7) / 8), 64);
+    }
+
+    spinlock_acquire(&g_drm_lock);
+    drm_dumb_bo_t *bo = drm_find_bo(handle);
+    if (!bo) {
+        spinlock_release(&g_drm_lock);
+        return -22;
+    }
+
+    drm_fb_t *fb = NULL;
+    for (size_t i = 0; i < DRM_MAX_FBS; i++) {
+        if (!g_framebuffers[i].allocated) {
+            fb = &g_framebuffers[i];
+            break;
+        }
+    }
+
+    if (!fb) {
+        spinlock_release(&g_drm_lock);
+        return -12;
+    }
+
+    fb->fb_id = g_next_fb_id++;
+    fb->width = cmd->width;
+    fb->height = cmd->height;
+    fb->pitch = pitch;
+    fb->bpp = bpp;
+    fb->depth = depth;
+    fb->pixel_format = pixel_format;
+    fb->bo_handle = handle;
     fb->allocated = true;
 
     cmd->fb_id = fb->fb_id;
@@ -530,6 +646,29 @@ static int drm_ioctl_dirty_fb(struct drm_mode_fb_dirty_cmd *dirty) {
     return 0;
 }
 
+static void drm_queue_flip_event(uint32_t crtc_id, uint64_t user_data) {
+    if (g_drm_events.count >= DRM_MAX_EVENTS) {
+        g_drm_events.head = (g_drm_events.head + 1) % DRM_MAX_EVENTS;
+        g_drm_events.count--;
+    }
+
+    uint64_t now_ns = rtc_get_monotonic_ns();
+    uint32_t sec = (uint32_t)(now_ns / 1000000000ULL);
+    uint32_t usec = (uint32_t)((now_ns % 1000000000ULL) / 1000);
+
+    struct drm_event_vblank *ev = &g_drm_events.events[g_drm_events.tail];
+    ev->base.type = DRM_EVENT_FLIP_COMPLETE;
+    ev->base.length = sizeof(struct drm_event_vblank);
+    ev->user_data = user_data;
+    ev->tv_sec = sec;
+    ev->tv_usec = usec;
+    ev->sequence = g_vblank_sequence++;
+    ev->crtc_id = crtc_id;
+
+    g_drm_events.tail = (g_drm_events.tail + 1) % DRM_MAX_EVENTS;
+    g_drm_events.count++;
+}
+
 static int drm_ioctl_page_flip(struct drm_mode_crtc_page_flip *flip) {
     if (!flip || flip->crtc_id == 0 || flip->fb_id == 0)
         return -22;
@@ -556,9 +695,414 @@ static int drm_ioctl_page_flip(struct drm_mode_crtc_page_flip *flip) {
         fb_blit_from_buffer((const uint32_t *)bo->kernel_virt, bo->pitch / 4, 0, 0, bo->width, bo->height);
     }
 
+    if (flip->flags & DRM_MODE_PAGE_FLIP_EVENT) {
+        drm_queue_flip_event(flip->crtc_id, flip->user_data);
+    }
+
     spinlock_release(&g_drm_lock);
     return 0;
 }
+
+ssize_t drm_read(void *buffer, size_t size) {
+    if (!buffer || size < sizeof(struct drm_event_vblank))
+        return -22;
+
+    spinlock_acquire(&g_drm_lock);
+    if (g_drm_events.count == 0) {
+        spinlock_release(&g_drm_lock);
+        return -11; /* EAGAIN */
+    }
+
+    struct drm_event_vblank ev = g_drm_events.events[g_drm_events.head];
+    g_drm_events.head = (g_drm_events.head + 1) % DRM_MAX_EVENTS;
+    g_drm_events.count--;
+    spinlock_release(&g_drm_lock);
+
+    if (!copy_to_user((uintptr_t)buffer, &ev, sizeof(struct drm_event_vblank)))
+        return -14;
+
+    return (ssize_t)sizeof(struct drm_event_vblank);
+}
+
+bool drm_has_events(void) {
+    return g_drm_events.count > 0;
+}
+
+/* ==============================================================================
+ * PRIME Subsystem (dma-buf Buffer Sharing)
+ * ============================================================================== */
+
+static int drm_mmap_bo_locked(drm_dumb_bo_t *bo, void *addr, size_t length, int prot, int flags, void **out_vaddr) {
+    (void)prot;
+    (void)flags;
+
+    process_t *proc = sched_get_current_process();
+    if (!proc || !out_vaddr || length == 0)
+        return -22;
+
+    if (proc->mmap_current == 0) {
+        proc->mmap_current = 0x0000600000000000ULL;
+    }
+
+    size_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
+    if (pages > bo->num_pages)
+        pages = bo->num_pages;
+
+    uintptr_t vaddr = (uintptr_t)addr;
+    if (vaddr == 0) {
+        vaddr = proc->mmap_current;
+        proc->mmap_current += pages * PAGE_SIZE;
+    }
+
+    for (size_t i = 0; i < pages; i++) {
+        uintptr_t phys = bo->phys_pages[i];
+        vmm_map_page(proc->pagemap, vaddr + i * PAGE_SIZE, phys,
+                     VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER);
+    }
+
+    *out_vaddr = (void *)vaddr;
+    return 0;
+}
+
+static int dmabuf_mmap(vfs_node_t *node, void *addr, size_t length, int prot, int flags, off_t offset, void **out_vaddr) {
+    (void)offset;
+    if (!node || !node->device_data)
+        return -22;
+
+    spinlock_acquire(&g_drm_lock);
+    drm_dumb_bo_t *bo = (drm_dumb_bo_t *)node->device_data;
+    if (!bo || !bo->allocated) {
+        spinlock_release(&g_drm_lock);
+        return -22;
+    }
+
+    int ret = drm_mmap_bo_locked(bo, addr, length, prot, flags, out_vaddr);
+    spinlock_release(&g_drm_lock);
+    return ret;
+}
+
+static int dmabuf_close(vfs_node_t *node) {
+    if (!node || !node->device_data)
+        return 0;
+
+    spinlock_acquire(&g_drm_lock);
+    drm_dumb_bo_t *bo = (drm_dumb_bo_t *)node->device_data;
+    drm_bo_unref_locked(bo);
+    spinlock_release(&g_drm_lock);
+
+    kfree(node);
+    return 0;
+}
+
+static vfs_ops_t g_dmabuf_ops = {
+    .read = NULL,
+    .write = NULL,
+    .open = NULL,
+    .close = dmabuf_close,
+    .readdir = NULL,
+    .finddir = NULL,
+    .create = NULL,
+    .mkdir = NULL,
+    .chmod = NULL,
+    .chown = NULL,
+    .unlink = NULL,
+    .ioctl = NULL,
+    .rename = NULL,
+    .rmdir = NULL,
+    .truncate = NULL,
+    .symlink = NULL,
+    .readlink = NULL,
+    .link = NULL,
+    .access = NULL,
+    .mmap = dmabuf_mmap,
+};
+
+bool drm_is_dmabuf_node(vfs_node_t *node) {
+    return node && node->ops == &g_dmabuf_ops;
+}
+
+static int drm_ioctl_prime_handle_to_fd(struct drm_prime_handle *req) {
+    if (!req || req->handle == 0)
+        return -22;
+
+    process_t *proc = sched_get_current_process();
+    if (!proc)
+        return -1;
+
+    spinlock_acquire(&g_drm_lock);
+    drm_dumb_bo_t *bo = drm_find_bo(req->handle);
+    if (!bo || !bo->allocated) {
+        spinlock_release(&g_drm_lock);
+        return -22;
+    }
+
+    int fd = -1;
+    for (int i = 0; i < MAX_FD; i++) {
+        if (!proc->fds[i]) {
+            fd = i;
+            break;
+        }
+    }
+    if (fd == -1) {
+        spinlock_release(&g_drm_lock);
+        return -24; /* EMFILE */
+    }
+
+    vfs_node_t *node = (vfs_node_t *)kzalloc(sizeof(vfs_node_t));
+    strcpy(node->name, "dmabuf");
+    node->flags = VFS_TYPE_CHARDEVICE;
+    node->permissions = 0666;
+    node->ops = &g_dmabuf_ops;
+    node->device_data = bo;
+    node->length = bo->size;
+
+    file_descriptor_t *fdesc = (file_descriptor_t *)kzalloc(sizeof(file_descriptor_t));
+    fdesc->node = node;
+    fdesc->flags = O_RDWR | (req->flags & 0x80000);
+    fdesc->refcount = 1;
+
+    proc->fds[fd] = fdesc;
+    proc->fd_cloexec[fd] = (req->flags & 0x80000) ? true : false;
+
+    bo->refcount++;
+    req->fd = fd;
+
+    spinlock_release(&g_drm_lock);
+    return 0;
+}
+
+static int drm_ioctl_prime_fd_to_handle(struct drm_prime_handle *req) {
+    if (!req || req->fd < 0)
+        return -22;
+
+    process_t *proc = sched_get_current_process();
+    if (!proc || req->fd >= MAX_FD || !proc->fds[req->fd])
+        return -9; /* EBADF */
+
+    file_descriptor_t *fdesc = proc->fds[req->fd];
+    if (!fdesc->node || fdesc->node->ops != &g_dmabuf_ops || !fdesc->node->device_data)
+        return -22; /* EINVAL */
+
+    spinlock_acquire(&g_drm_lock);
+    drm_dumb_bo_t *bo = (drm_dumb_bo_t *)fdesc->node->device_data;
+    if (!bo || !bo->allocated) {
+        spinlock_release(&g_drm_lock);
+        return -22;
+    }
+
+    bo->refcount++;
+    req->handle = bo->handle;
+    spinlock_release(&g_drm_lock);
+    return 0;
+}
+
+/* ==============================================================================
+ * Syncobj Subsystem
+ * ============================================================================== */
+
+static drm_syncobj_t *drm_find_syncobj(uint32_t handle) {
+    if (handle == 0)
+        return NULL;
+    for (size_t i = 0; i < DRM_MAX_SYNCOBJS; i++) {
+        if (g_syncobjs[i].allocated && g_syncobjs[i].handle == handle)
+            return &g_syncobjs[i];
+    }
+    return NULL;
+}
+
+static int drm_ioctl_syncobj_create(struct drm_syncobj_create *req) {
+    if (!req)
+        return -22;
+
+    spinlock_acquire(&g_drm_lock);
+    drm_syncobj_t *so = NULL;
+    for (size_t i = 0; i < DRM_MAX_SYNCOBJS; i++) {
+        if (!g_syncobjs[i].allocated) {
+            so = &g_syncobjs[i];
+            break;
+        }
+    }
+    if (!so) {
+        spinlock_release(&g_drm_lock);
+        return -12; /* ENOMEM */
+    }
+
+    so->handle = g_next_syncobj_handle++;
+    so->allocated = true;
+    so->signaled = (req->flags & DRM_SYNCOBJ_CREATE_SIGNALED) ? true : false;
+
+    req->handle = so->handle;
+    spinlock_release(&g_drm_lock);
+    return 0;
+}
+
+static int drm_ioctl_syncobj_destroy(struct drm_syncobj_destroy *req) {
+    if (!req || req->handle == 0)
+        return -22;
+
+    spinlock_acquire(&g_drm_lock);
+    drm_syncobj_t *so = drm_find_syncobj(req->handle);
+    if (!so) {
+        spinlock_release(&g_drm_lock);
+        return -22;
+    }
+
+    memset(so, 0, sizeof(drm_syncobj_t));
+    spinlock_release(&g_drm_lock);
+    return 0;
+}
+
+static int drm_ioctl_syncobj_wait(struct drm_syncobj_wait *req) {
+    if (!req || req->handles == 0 || req->count_handles == 0 || req->count_handles > 64)
+        return -22;
+
+    uint32_t handles[64];
+    if (!copy_from_user(handles, (uintptr_t)req->handles, sizeof(uint32_t) * req->count_handles))
+        return -14; /* EFAULT */
+
+    bool wait_all = (req->flags & DRM_SYNCOBJ_WAIT_FLAGS_WAIT_ALL) != 0;
+    uint64_t start_ns = rtc_get_monotonic_ns();
+    uint64_t timeout_ns = (req->timeout_nsec > 0) ? (uint64_t)req->timeout_nsec : 0;
+
+    while (1) {
+        spinlock_acquire(&g_drm_lock);
+        uint32_t ready_count = 0;
+        uint32_t first_ready = 0;
+
+        for (uint32_t i = 0; i < req->count_handles; i++) {
+            drm_syncobj_t *so = drm_find_syncobj(handles[i]);
+            if (!so) {
+                spinlock_release(&g_drm_lock);
+                return -22;
+            }
+            if (so->signaled) {
+                if (ready_count == 0)
+                    first_ready = i;
+                ready_count++;
+            }
+        }
+
+        bool satisfied = wait_all ? (ready_count == req->count_handles) : (ready_count > 0);
+        if (satisfied) {
+            req->first_signaled = first_ready;
+            spinlock_release(&g_drm_lock);
+            return 0;
+        }
+
+        spinlock_release(&g_drm_lock);
+
+        uint64_t now_ns = rtc_get_monotonic_ns();
+        if (timeout_ns == 0 || now_ns - start_ns >= timeout_ns) {
+            return -62; /* ETIME */
+        }
+
+        thread_sleep(1);
+    }
+}
+
+static int syncfile_close(vfs_node_t *node) {
+    if (node) {
+        kfree(node);
+    }
+    return 0;
+}
+
+static vfs_ops_t g_syncfile_ops = {
+    .read = NULL,
+    .write = NULL,
+    .open = NULL,
+    .close = syncfile_close,
+    .readdir = NULL,
+    .finddir = NULL,
+    .create = NULL,
+    .mkdir = NULL,
+    .chmod = NULL,
+    .chown = NULL,
+    .unlink = NULL,
+    .ioctl = NULL,
+    .rename = NULL,
+    .rmdir = NULL,
+    .truncate = NULL,
+    .symlink = NULL,
+    .readlink = NULL,
+    .link = NULL,
+    .access = NULL,
+    .mmap = NULL,
+};
+
+static int drm_ioctl_syncobj_handle_to_fd(struct drm_syncobj_handle *req) {
+    if (!req || req->handle == 0)
+        return -22;
+
+    process_t *proc = sched_get_current_process();
+    if (!proc)
+        return -1;
+
+    spinlock_acquire(&g_drm_lock);
+    drm_syncobj_t *so = drm_find_syncobj(req->handle);
+    if (!so) {
+        spinlock_release(&g_drm_lock);
+        return -22;
+    }
+
+    int fd = -1;
+    for (int i = 0; i < MAX_FD; i++) {
+        if (!proc->fds[i]) {
+            fd = i;
+            break;
+        }
+    }
+    if (fd == -1) {
+        spinlock_release(&g_drm_lock);
+        return -24;
+    }
+
+    vfs_node_t *node = (vfs_node_t *)kzalloc(sizeof(vfs_node_t));
+    strcpy(node->name, "sync_file");
+    node->flags = VFS_TYPE_CHARDEVICE;
+    node->permissions = 0666;
+    node->ops = &g_syncfile_ops;
+    node->device_data = so;
+
+    file_descriptor_t *fdesc = (file_descriptor_t *)kzalloc(sizeof(file_descriptor_t));
+    fdesc->node = node;
+    fdesc->flags = O_RDWR | (req->flags & 0x80000);
+    fdesc->refcount = 1;
+
+    proc->fds[fd] = fdesc;
+    req->fd = fd;
+
+    spinlock_release(&g_drm_lock);
+    return 0;
+}
+
+static int drm_ioctl_syncobj_fd_to_handle(struct drm_syncobj_handle *req) {
+    if (!req || req->fd < 0)
+        return -22;
+
+    process_t *proc = sched_get_current_process();
+    if (!proc || req->fd >= MAX_FD || !proc->fds[req->fd])
+        return -9;
+
+    file_descriptor_t *fdesc = proc->fds[req->fd];
+    if (!fdesc->node || fdesc->node->ops != &g_syncfile_ops || !fdesc->node->device_data)
+        return -22;
+
+    spinlock_acquire(&g_drm_lock);
+    drm_syncobj_t *so = (drm_syncobj_t *)fdesc->node->device_data;
+    if (!so || !so->allocated) {
+        spinlock_release(&g_drm_lock);
+        return -22;
+    }
+
+    req->handle = so->handle;
+    spinlock_release(&g_drm_lock);
+    return 0;
+}
+
+/* ==============================================================================
+ * DRM Ioctl Dispatchers
+ * ============================================================================== */
 
 int drm_ioctl(uint64_t request, void *argp) {
     if (!g_drm_initialized) {
@@ -609,8 +1153,14 @@ int drm_ioctl(uint64_t request, void *argp) {
     case DRM_IOCTL_MODE_DESTROY_DUMB:
         return drm_ioctl_destroy_dumb((struct drm_mode_destroy_dumb *)argp);
 
+    case DRM_IOCTL_GEM_CLOSE:
+        return drm_ioctl_gem_close((struct drm_gem_close *)argp);
+
     case DRM_IOCTL_MODE_ADDFB:
         return drm_ioctl_add_fb((struct drm_mode_fb_cmd *)argp);
+
+    case DRM_IOCTL_MODE_ADDFB2:
+        return drm_ioctl_add_fb2((struct drm_mode_fb_cmd2 *)argp);
 
     case DRM_IOCTL_MODE_RMFB:
         return drm_ioctl_rm_fb((uint32_t *)argp);
@@ -621,49 +1171,106 @@ int drm_ioctl(uint64_t request, void *argp) {
     case DRM_IOCTL_MODE_DIRTYFB:
         return drm_ioctl_dirty_fb((struct drm_mode_fb_dirty_cmd *)argp);
 
+    case DRM_IOCTL_PRIME_HANDLE_TO_FD:
+        return drm_ioctl_prime_handle_to_fd((struct drm_prime_handle *)argp);
+
+    case DRM_IOCTL_PRIME_FD_TO_HANDLE:
+        return drm_ioctl_prime_fd_to_handle((struct drm_prime_handle *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_CREATE:
+        return drm_ioctl_syncobj_create((struct drm_syncobj_create *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_DESTROY:
+        return drm_ioctl_syncobj_destroy((struct drm_syncobj_destroy *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD:
+        return drm_ioctl_syncobj_handle_to_fd((struct drm_syncobj_handle *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE:
+        return drm_ioctl_syncobj_fd_to_handle((struct drm_syncobj_handle *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_WAIT:
+        return drm_ioctl_syncobj_wait((struct drm_syncobj_wait *)argp);
+
     default:
         klog_warn("DRM: Unsupported ioctl 0x%lx", request);
         return -22; /* EINVAL */
     }
 }
 
-int drm_mmap(void *addr, size_t length, int prot, int flags, off_t offset, void **out_vaddr) {
-    (void)prot;
-    (void)flags;
+int drm_render_ioctl(uint64_t request, void *argp) {
+    if (!g_drm_initialized) {
+        drm_init();
+    }
 
-    process_t *proc = sched_get_current_process();
-    if (!proc || !out_vaddr || length == 0)
+    switch (request) {
+    case DRM_IOCTL_VERSION:
+        return drm_ioctl_version((struct drm_version *)argp);
+
+    case DRM_IOCTL_GET_CAP:
+        return drm_ioctl_get_cap((struct drm_get_cap *)argp);
+
+    case DRM_IOCTL_SET_CLIENT_CAP:
+        return 0;
+
+    case DRM_IOCTL_MODE_CREATE_DUMB:
+        return drm_ioctl_create_dumb((struct drm_mode_create_dumb *)argp);
+
+    case DRM_IOCTL_MODE_MAP_DUMB:
+        return drm_ioctl_map_dumb((struct drm_mode_map_dumb *)argp);
+
+    case DRM_IOCTL_MODE_DESTROY_DUMB:
+        return drm_ioctl_destroy_dumb((struct drm_mode_destroy_dumb *)argp);
+
+    case DRM_IOCTL_GEM_CLOSE:
+        return drm_ioctl_gem_close((struct drm_gem_close *)argp);
+
+    case DRM_IOCTL_PRIME_HANDLE_TO_FD:
+        return drm_ioctl_prime_handle_to_fd((struct drm_prime_handle *)argp);
+
+    case DRM_IOCTL_PRIME_FD_TO_HANDLE:
+        return drm_ioctl_prime_fd_to_handle((struct drm_prime_handle *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_CREATE:
+        return drm_ioctl_syncobj_create((struct drm_syncobj_create *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_DESTROY:
+        return drm_ioctl_syncobj_destroy((struct drm_syncobj_destroy *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_HANDLE_TO_FD:
+        return drm_ioctl_syncobj_handle_to_fd((struct drm_syncobj_handle *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_FD_TO_HANDLE:
+        return drm_ioctl_syncobj_fd_to_handle((struct drm_syncobj_handle *)argp);
+
+    case DRM_IOCTL_SYNCOBJ_WAIT:
+        return drm_ioctl_syncobj_wait((struct drm_syncobj_wait *)argp);
+
+    /* Render nodes explicitly forbid mode setting and master ioctls */
+    case DRM_IOCTL_SET_MASTER:
+    case DRM_IOCTL_DROP_MASTER:
+    case DRM_IOCTL_MODE_SETCRTC:
+    case DRM_IOCTL_MODE_PAGE_FLIP:
+        return -13; /* EACCES */
+
+    default:
+        return drm_ioctl(request, argp);
+    }
+}
+
+int drm_mmap(void *addr, size_t length, int prot, int flags, off_t offset, void **out_vaddr) {
+    if (!out_vaddr || length == 0)
         return -22;
 
     uint32_t handle = (uint32_t)(offset >> 12);
     spinlock_acquire(&g_drm_lock);
     drm_dumb_bo_t *bo = drm_find_bo(handle);
-    if (!bo) {
+    if (!bo || !bo->allocated) {
         spinlock_release(&g_drm_lock);
         return -22;
     }
 
-    if (proc->mmap_current == 0) {
-        proc->mmap_current = 0x0000600000000000ULL;
-    }
-
-    size_t pages = (length + PAGE_SIZE - 1) / PAGE_SIZE;
-    if (pages > bo->num_pages)
-        pages = bo->num_pages;
-
-    uintptr_t vaddr = (uintptr_t)addr;
-    if (vaddr == 0) {
-        vaddr = proc->mmap_current;
-        proc->mmap_current += pages * PAGE_SIZE;
-    }
-
-    for (size_t i = 0; i < pages; i++) {
-        uintptr_t phys = bo->phys_pages[i];
-        vmm_map_page(proc->pagemap, vaddr + i * PAGE_SIZE, phys,
-                     VMM_FLAG_PRESENT | VMM_FLAG_WRITABLE | VMM_FLAG_USER);
-    }
-
+    int ret = drm_mmap_bo_locked(bo, addr, length, prot, flags, out_vaddr);
     spinlock_release(&g_drm_lock);
-    *out_vaddr = (void *)vaddr;
-    return 0;
+    return ret;
 }

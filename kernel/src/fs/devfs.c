@@ -40,6 +40,7 @@ static vfs_ops_t g_psaux_ops;
 static vfs_ops_t g_speaker_ops;
 static vfs_ops_t g_block_ops;
 static vfs_ops_t g_drm_ops;
+static vfs_ops_t g_drm_render_ops;
 
 /* /dev/null */
 static ssize_t devfs_null_read(vfs_node_t *node, off_t offset, size_t size, void *buffer) {
@@ -162,6 +163,17 @@ static ssize_t devfs_speaker_write(vfs_node_t *node, off_t offset, size_t size, 
 static int devfs_drm_ioctl(vfs_node_t *node, uint64_t request, uintptr_t arg) {
     UNUSED(node);
     return drm_ioctl(request, (void *)arg);
+}
+
+static int devfs_drm_render_ioctl(vfs_node_t *node, uint64_t request, uintptr_t arg) {
+    UNUSED(node);
+    return drm_render_ioctl(request, (void *)arg);
+}
+
+static ssize_t devfs_drm_read(vfs_node_t *node, off_t offset, size_t size, void *buffer) {
+    UNUSED(node);
+    UNUSED(offset);
+    return drm_read(buffer, size);
 }
 
 static int devfs_drm_mmap(vfs_node_t *node, void *addr, size_t length, int prot, int flags, off_t offset, void **out_vaddr) {
@@ -418,6 +430,11 @@ void devfs_init(void) {
 
     g_drm_ops.ioctl = devfs_drm_ioctl;
     g_drm_ops.mmap = devfs_drm_mmap;
+    g_drm_ops.read = devfs_drm_read;
+
+    g_drm_render_ops.ioctl = devfs_drm_render_ioctl;
+    g_drm_render_ops.mmap = devfs_drm_mmap;
+    g_drm_render_ops.read = devfs_drm_read;
 
     g_devfs_root = (vfs_node_t *)kzalloc(sizeof(vfs_node_t));
     strcpy(g_devfs_root->name, "dev");
@@ -483,19 +500,31 @@ void devfs_init(void) {
     card0_dev->ops = &g_drm_ops;
     devfs_register_device_path("dri/card0", card0_dev);
 
+    vfs_node_t *render_dev = (vfs_node_t *)kzalloc(sizeof(vfs_node_t));
+    render_dev->flags = VFS_TYPE_CHARDEVICE;
+    render_dev->permissions = 0666;
+    render_dev->ops = &g_drm_render_ops;
+    devfs_register_device_path("dri/renderD128", render_dev);
+
     vfs_node_t *ctrl_dev = (vfs_node_t *)kzalloc(sizeof(vfs_node_t));
     ctrl_dev->flags = VFS_TYPE_CHARDEVICE;
     ctrl_dev->permissions = 0666;
     ctrl_dev->ops = &g_drm_ops;
     devfs_register_device_path("dri/controlD64", ctrl_dev);
 
-    /* Alias /dev/card0 */
+    /* Aliases */
     vfs_node_t *card0_alias = (vfs_node_t *)kzalloc(sizeof(vfs_node_t));
     card0_alias->flags = VFS_TYPE_CHARDEVICE;
     card0_alias->permissions = 0666;
     card0_alias->ops = &g_drm_ops;
     devfs_register_device("card0", card0_alias);
 
+    vfs_node_t *render_alias = (vfs_node_t *)kzalloc(sizeof(vfs_node_t));
+    render_alias->flags = VFS_TYPE_CHARDEVICE;
+    render_alias->permissions = 0666;
+    render_alias->ops = &g_drm_render_ops;
+    devfs_register_device("renderD128", render_alias);
+
     vfs_mount("/dev", g_devfs_root);
-    klog_info("DevFS mounted at /dev with devices: null, zero, serial, tty, console, psaux, mouse, speaker, dri/card0");
+    klog_info("DevFS mounted at /dev with devices: null, zero, serial, tty, console, psaux, mouse, speaker, dri/card0, dri/renderD128");
 }
