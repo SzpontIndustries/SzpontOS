@@ -100,6 +100,28 @@ int futex_wake(uintptr_t uaddr, int count) {
     return woken;
 }
 
+/* Removes a thread from whatever futex bucket it's blocked in, if any.
+ * Must be called before a blocked thread is force-transitioned to
+ * THREAD_ZOMBIE (e.g. process_exit(), a fatal signal) — otherwise its
+ * futex_node stays linked into g_futex_buckets[] and a later futex_wake()
+ * on the same address can resurrect the (possibly already-freed) thread
+ * into the ready queue. */
+void futex_remove_thread(thread_t *t) {
+    if (!t || !t->futex_proc)
+        return;
+
+    uint32_t bucket_idx = FUTEX_HASH(t->futex_uaddr);
+    futex_bucket_t *bucket = &g_futex_buckets[bucket_idx];
+
+    spinlock_acquire(&bucket->lock);
+    if (t->futex_proc) {
+        list_remove(&t->futex_node);
+        t->futex_uaddr = 0;
+        t->futex_proc = NULL;
+    }
+    spinlock_release(&bucket->lock);
+}
+
 int futex_requeue(uintptr_t uaddr1, int wake_count, uintptr_t uaddr2, int requeue_count) {
     if (uaddr1 == 0 || uaddr2 == 0)
         return -1;

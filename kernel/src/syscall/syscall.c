@@ -1995,8 +1995,17 @@ static void *sys_mmap(void *addr, size_t length, int prot, int flags, int fd, of
 
     for (size_t i = 0; i < pages; i++) {
         uintptr_t phys = pmm_alloc_page();
-        if (!phys)
+        if (!phys) {
+            /* Roll back pages already allocated/mapped for this request. */
+            for (size_t j = 0; j < i; j++) {
+                uintptr_t jvirt = vaddr + j * PAGE_SIZE;
+                uintptr_t jphys = vmm_virt_to_phys(proc->pagemap, jvirt);
+                vmm_unmap_page(proc->pagemap, jvirt);
+                if (jphys)
+                    pmm_free_page(jphys);
+            }
             return (void *)-1;
+        }
         memset(PHYS_TO_VIRT(phys), 0, PAGE_SIZE);
         vmm_map_page(proc->pagemap, vaddr + i * PAGE_SIZE, phys, VMM_FLAG_WRITABLE | VMM_FLAG_USER);
     }

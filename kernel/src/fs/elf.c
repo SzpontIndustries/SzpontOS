@@ -34,6 +34,10 @@ static void elf_write_user_mem(pagemap_t *map, uintptr_t vaddr, const void *src,
         uintptr_t phys = vmm_virt_to_phys(map, page_vaddr);
         if (!phys) {
             phys = pmm_alloc_page();
+            if (!phys) {
+                klog_error("ELF: Out of physical memory while writing user memory!");
+                return;
+            }
             memset(PHYS_TO_VIRT(phys), 0, PAGE_SIZE);
             vmm_map_page(map, page_vaddr, phys, VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_PRESENT);
         }
@@ -120,6 +124,11 @@ static int elf_load_segments(vfs_node_t *file, pagemap_t *map, uintptr_t base_va
             uintptr_t ppage = vmm_virt_to_phys(map, vpage);
             if (!ppage) {
                 ppage = pmm_alloc_page();
+                if (!ppage) {
+                    klog_error("ELF: Out of physical memory while loading PT_LOAD segment!");
+                    kfree(phdrs);
+                    return -1;
+                }
                 memset(PHYS_TO_VIRT(ppage), 0, PAGE_SIZE);
                 vmm_map_page(map, vpage, ppage, vmm_flags);
             }
@@ -339,6 +348,10 @@ static inline void elf_write_u64_cached(pagemap_t *map, uintptr_t vaddr, uint64_
             uintptr_t phys = vmm_virt_to_phys(map, page_vaddr);
             if (!phys) {
                 phys = pmm_alloc_page();
+                if (!phys) {
+                    klog_error("ELF: Out of physical memory while applying relocations!");
+                    return;
+                }
                 memset(PHYS_TO_VIRT(phys), 0, PAGE_SIZE);
                 vmm_map_page(map, page_vaddr, phys, VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_PRESENT);
             }
@@ -620,6 +633,10 @@ int elf_load_binary(vfs_node_t *file, pagemap_t *map, uintptr_t *out_entry, uint
     for (size_t pg = 0; pg < stack_pages; pg++) {
         uintptr_t vpage = USER_STACK_BASE + pg * PAGE_SIZE;
         uintptr_t ppage = pmm_alloc_page();
+        if (!ppage) {
+            klog_error("ELF: Out of physical memory while allocating user stack!");
+            return -1;
+        }
         memset(PHYS_TO_VIRT(ppage), 0, PAGE_SIZE);
         vmm_map_page(map, vpage, ppage, VMM_FLAG_USER | VMM_FLAG_WRITABLE | VMM_FLAG_PRESENT);
     }
@@ -647,6 +664,7 @@ process_t *elf_spawn(const char *path, const char *name) {
 
     if (elf_load_binary(file, proc->pagemap, &entry, &user_stack, &brk_start) != 0) {
         klog_error("ELF: Failed to load binary '%s'", path);
+        process_destroy_unstarted(proc);
         return NULL;
     }
 
@@ -655,6 +673,11 @@ process_t *elf_spawn(const char *path, const char *name) {
 
     /* Spawn thread in process with user_thread_trampoline */
     thread_t *t = thread_create(proc, user_thread_trampoline, true);
+    if (!t) {
+        klog_error("ELF: Failed to create initial thread for '%s'", path);
+        process_destroy_unstarted(proc);
+        return NULL;
+    }
     t->user_entry = entry;
     t->user_stack = user_stack;
 

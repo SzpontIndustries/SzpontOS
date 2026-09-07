@@ -31,7 +31,15 @@ if command -v apt-get >/dev/null 2>&1; then
         git \
         python3 \
         make \
-        gdb
+        gdb \
+        cmake \
+        clang \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        xutils-dev \
+        imagemagick
 
 elif command -v dnf >/dev/null 2>&1; then
     echo "[*] Instalowanie pakietów przez dnf (Fedora/RHEL)..."
@@ -46,7 +54,15 @@ elif command -v dnf >/dev/null 2>&1; then
         git \
         python3 \
         make \
-        gdb
+        gdb \
+        cmake \
+        clang \
+        autoconf \
+        automake \
+        libtool \
+        pkgconf-pkg-config \
+        xorg-x11-util-macros \
+        ImageMagick
 
 elif command -v pacman >/dev/null 2>&1; then
     echo "[*] Instalowanie pakietów przez pacman (Arch/Manjaro)..."
@@ -61,7 +77,15 @@ elif command -v pacman >/dev/null 2>&1; then
         git \
         python \
         make \
-        gdb
+        gdb \
+        cmake \
+        clang \
+        autoconf \
+        automake \
+        libtool \
+        pkgconf \
+        xorg-util-macros \
+        imagemagick
 
 elif command -v zypper >/dev/null 2>&1; then
     echo "[*] Instalowanie pakietów przez zypper (openSUSE)..."
@@ -76,7 +100,15 @@ elif command -v zypper >/dev/null 2>&1; then
         git \
         python3 \
         make \
-        gdb
+        gdb \
+        cmake \
+        clang \
+        autoconf \
+        automake \
+        libtool \
+        pkg-config \
+        xorg-x11-util-devel \
+        ImageMagick
 
 elif command -v apk >/dev/null 2>&1; then
     echo "[*] Instalowanie pakietów przez apk (Alpine)..."
@@ -91,9 +123,17 @@ elif command -v apk >/dev/null 2>&1; then
         git \
         python3 \
         make \
-        gdb
+        gdb \
+        cmake \
+        clang \
+        autoconf \
+        automake \
+        libtool \
+        pkgconf \
+        util-macros \
+        imagemagick
 else
-    echo "[!] Nie rozpoznano menedżera pakietów. Zainstaluj ręcznie: gcc, nasm, xorriso, qemu-system-x86_64, bear, make, python3."
+    echo "[!] Nie rozpoznano menedżera pakietów. Zainstaluj ręcznie: gcc, nasm, xorriso, qemu-system-x86_64, bear, make, python3, cmake, clang, autoconf, automake, libtool, pkg-config, xorg-macros (xutils-dev), imagemagick."
 fi
 
 # Optional KVM group permission check

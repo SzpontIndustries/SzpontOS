@@ -30,6 +30,13 @@ static void heap_expand(size_t size) {
     size_t pages = size / PAGE_SIZE;
 
     uintptr_t phys = pmm_alloc_pages(pages);
+    if (!phys) {
+        /* Out of physical memory: leave the heap as-is. The caller's
+         * post-expand retry will find no suitable block and hit the
+         * existing "Heap: Out of memory" panic instead of corrupting
+         * whatever lives at PHYS_TO_VIRT(0). */
+        return;
+    }
     void *virt = PHYS_TO_VIRT(phys);
 
     heap_block_t *new_block = (heap_block_t *)virt;
@@ -143,6 +150,10 @@ void *kzalloc(size_t size) {
 }
 
 void *kcalloc(size_t num, size_t size) {
+    if (num != 0 && size > ((size_t)-1 / num)) {
+        /* num * size would overflow */
+        return NULL;
+    }
     return kzalloc(num * size);
 }
 

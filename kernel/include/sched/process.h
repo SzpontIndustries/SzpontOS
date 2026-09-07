@@ -78,6 +78,7 @@ void process_init(void);
 process_t *process_create(const char *name);
 process_t *process_fork(process_t *parent);
 void process_exit(int exit_code);
+void process_destroy_unstarted(process_t *proc);
 pid_t process_waitpid(pid_t pid, int *status, int options);
 process_t *process_get_by_pid(pid_t pid);
 int process_send_signal(process_t *proc, int sig);

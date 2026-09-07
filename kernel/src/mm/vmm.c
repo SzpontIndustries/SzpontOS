@@ -41,6 +41,9 @@ static page_table_t *get_next_level(page_table_t *current, size_t index, bool al
     }
 
     uintptr_t new_table_phys = pmm_alloc_page();
+    if (!new_table_phys) {
+        return NULL;
+    }
     page_table_t *new_table_virt = (page_table_t *)PHYS_TO_VIRT(new_table_phys);
     memset(new_table_virt, 0, sizeof(page_table_t));
 
@@ -270,6 +273,10 @@ pagemap_t *vmm_clone_address_space(pagemap_t *src) {
                                     uint64_t flags = pt->entries[l] & 0xFFF;
 
                                     uintptr_t dst_phys = pmm_alloc_page();
+                                    if (!dst_phys) {
+                                        klog_error("VMM: Out of physical memory while cloning address space (fork)!");
+                                        continue;
+                                    }
                                     memcpy(PHYS_TO_VIRT(dst_phys), PHYS_TO_VIRT(src_phys), PAGE_SIZE);
                                     vmm_map_page(dst, virt, dst_phys, flags);
                                 }

@@ -5,6 +5,7 @@
 #include <mm/vmm.h>
 #include <kernel/kprint.h>
 #include <kernel/spinlock.h>
+#include <kernel/panic.h>
 #include <net/net.h>
 
 static list_node_t g_ready_queue = LIST_HEAD_INIT(g_ready_queue);
@@ -30,6 +31,9 @@ void sched_init(void) {
     /* Create Idle Thread / Process */
     process_t *idle_proc = process_create("idle");
     g_idle_thread = thread_create(idle_proc, idle_thread_func, false);
+    if (!g_idle_thread) {
+        panic("sched_init: Failed to allocate the idle thread's kernel stack!");
+    }
     list_remove(&g_idle_thread->sched_node); /* Not in normal ready queue */
 
     klog_info("Preemptive Scheduler initialized (Round-Robin)");

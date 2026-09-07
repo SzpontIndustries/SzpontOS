@@ -136,6 +136,34 @@ process_t *process_create(const char *name) {
     return proc;
 }
 
+/* Tears down a process that was created via process_create() but never
+ * successfully reached thread_create() (e.g. ELF loading failed part-way
+ * through, possibly due to physical memory exhaustion). Reclaims the
+ * address space (and any partially-mapped pages within it), closes any
+ * standard streams opened by process_create(), removes it from the
+ * global process list, and frees the process_t itself. */
+void process_destroy_unstarted(process_t *proc) {
+    if (!proc)
+        return;
+
+    spinlock_acquire(&g_process_lock);
+    list_remove(&proc->proc_list_node);
+    spinlock_release(&g_process_lock);
+
+    for (int i = 0; i < 3; i++) {
+        if (proc->fds[i]) {
+            kfree(proc->fds[i]);
+            proc->fds[i] = NULL;
+        }
+    }
+
+    if (proc->pagemap) {
+        vmm_destroy_address_space(proc->pagemap);
+    }
+
+    kfree(proc);
+}
+
 thread_t *thread_create(process_t *proc, void (*entry_point)(void), bool is_user) {
     UNUSED(is_user);
     if (!proc)
@@ -152,6 +180,12 @@ thread_t *thread_create(process_t *proc, void (*entry_point)(void), bool is_user
     /* Allocate 16 KiB kernel stack */
     size_t stack_pages = KERNEL_STACK_SIZE / PAGE_SIZE;
     uintptr_t stack_phys = pmm_alloc_pages(stack_pages);
+    if (!stack_phys) {
+        klog_error("thread_create: Out of physical memory allocating kernel stack!");
+        kfree(t);
+        spinlock_release(&g_process_lock);
+        return NULL;
+    }
     t->kernel_stack_bottom = (uintptr_t)PHYS_TO_VIRT(stack_phys);
     t->kernel_stack_top = t->kernel_stack_bottom + KERNEL_STACK_SIZE;
 
@@ -279,6 +313,7 @@ void process_exit(int exit_code) {
     list_node_t *pos;
     list_for_each(pos, &proc->threads) {
         thread_t *t = container_of(pos, thread_t, proc_node);
+        futex_remove_thread(t);
         t->state = THREAD_ZOMBIE;
         sched_remove_thread(t);
     }
@@ -336,6 +371,7 @@ int process_send_signal(process_t *proc, int sig) {
             list_node_t *pos;
             list_for_each(pos, &proc->threads) {
                 thread_t *t = container_of(pos, thread_t, proc_node);
+                futex_remove_thread(t);
                 t->state = THREAD_ZOMBIE;
             }
 

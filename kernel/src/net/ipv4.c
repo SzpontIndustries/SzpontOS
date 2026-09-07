@@ -57,7 +57,7 @@ void ipv4_input(netif_t *netif, net_buf_t *buf) {
     }
 
     uint16_t total_len = ntohs(ip->total_len);
-    if (total_len > buf->len) {
+    if (total_len > buf->len || total_len < ihl) {
         net_buf_free(buf);
         return;
     }
