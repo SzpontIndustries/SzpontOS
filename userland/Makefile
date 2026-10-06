@@ -6,9 +6,10 @@ include $(ROOT_DIR)/config.mk
 
 all: userland
 
+# NOTE (single-shot fix): USERLAND_STAMP owner is ONLY top-level Makefile.
+# This sub-makefile builds components but never touches the stamp, avoiding
+# double-touch races where top and sub-make both update the same file.
 userland: skeleton lib init sh bin szpontlogin szpontdesktop szponter szpontview szpontmon xserver
-	@mkdir -p $(dir $(USERLAND_STAMP))
-	@touch $(USERLAND_STAMP)
 
 skeleton:
 	@mkdir -p $(ROOTFS_DIR)/bin $(ROOTFS_DIR)/sbin $(ROOTFS_DIR)/lib \

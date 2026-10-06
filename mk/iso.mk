@@ -22,9 +22,16 @@ limine: limine-bin/limine-bios.sys limine-bin/limine
 
 # ==============================================================================
 # Build initramfs archive
+# NOTE (single-shot fix): initramfs is the serialization point. It waits for
+# the full `build` (sysroot -> third-party -> userland/modules -> kernel).
+# USERLAND_STAMP already chains after THIRDPARTY_STAMP (see root Makefile), so
+# listing stamps here is defense-in-depth for direct `make initramfs` calls.
+# verify_rootfs.py MUST fail loudly (no `|| true`) - incomplete rootfs from
+# a first pass must stop the build instead of producing a broken ISO that
+# only succeeds on the 2nd `make`.
 # ==============================================================================
 SKELETON_FILES := $(shell find $(ROOTFS_SKELETON_DIR) -type f 2>/dev/null)
-$(BUILD_DIR)/initramfs.tar: $(USERLAND_STAMP) $(MODULES_STAMP) $(THIRDPARTY_STAMP) $(ALL_ROOTFS_SOS) $(KERNEL_ELF) $(SKELETON_FILES) | $(ROOTFS_DIR)
+$(BUILD_DIR)/initramfs.tar: build $(USERLAND_STAMP) $(MODULES_STAMP) $(THIRDPARTY_STAMP) $(KERNEL_ELF) $(SKELETON_FILES) | $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(ROOTFS_DIR)/sbin $(ROOTFS_DIR)/lib \
 		$(ROOTFS_DIR)/usr/bin $(ROOTFS_DIR)/usr/sbin $(ROOTFS_DIR)/usr/lib $(ROOTFS_DIR)/usr/tbin \
@@ -76,8 +83,11 @@ disk: $(DISK_IMAGE)
 
 # ==============================================================================
 # Build bootable ISO
+# NOTE (single-shot fix): ISO strictly depends on `build` first, so even
+# `make -j` cannot run xorriso/limine packaging concurrently with rootfs
+# population. `iso` is a convenience alias only.
 # ==============================================================================
-$(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initramfs.tar limine-bin/limine-bios.sys limine-bin/limine $(DISK_IMAGE)
+$(ISO_IMAGE): build $(KERNEL_ELF) $(BUILD_DIR)/initramfs.tar limine-bin/limine-bios.sys limine-bin/limine $(DISK_IMAGE)
 	@echo "  [ISO] Tworzenie obrazu rozruchowego $(ISO_IMAGE)..."
 	@rm -rf $(ISO_DIR)
 	@mkdir -p $(ISO_DIR)/boot $(ISO_DIR)/boot/limine $(ISO_DIR)/EFI/BOOT
@@ -97,4 +107,4 @@ $(ISO_IMAGE): $(KERNEL_ELF) $(BUILD_DIR)/initramfs.tar limine-bin/limine-bios.sy
 	@./limine-bin/limine bios-install $(ISO_IMAGE)
 	@echo "  [OK]  Obraz ISO gotowy: $(ISO_IMAGE)"
 
-iso: build $(ISO_IMAGE)
+iso: $(ISO_IMAGE)

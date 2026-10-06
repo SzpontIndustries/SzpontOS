@@ -2,6 +2,26 @@
 # Included by root Makefile
 
 # ==============================================================================
+# Git submodules guard (single-shot fix): cryptic "No rule to make target
+# `third_party/*/configure'" meant empty submodule dirs. Fail fast with a
+# clear hint instead of requiring repeated `make` to discover it.
+# ==============================================================================
+.PHONY: submodules-check
+submodules-check:
+	@if [ ! -f third_party/xorgproto/configure.ac ] && [ ! -d third_party/xorgproto/include ]; then \
+		echo "  [ERR] third_party/* wygląda na puste (submodules nie zainicjalizowane)."; \
+		echo "        Uruchom: git submodule update --init --recursive"; \
+		exit 1; \
+	fi
+
+# ncurses configure generator (single-shot fix): previously no rule existed to
+# create `third_party/ncurses/configure`, so clean builds failed with
+# "No rule to make target" and only succeeded after manual autoreconf.
+third_party/ncurses/configure:
+	@echo "  [PRECONF-NCURSES] Generowanie configure dla GNU Ncurses..."
+	@cd third_party/ncurses && autoreconf -fi
+
+# ==============================================================================
 # Shared Libraries Required in Rootfs
 # ==============================================================================
 ALL_ROOTFS_SOS := \
@@ -98,7 +118,7 @@ $(NCURSES_BUILD_DIR)/Makefile: third_party/ncurses/configure | $(SYSROOT_STAMP) 
 	@echo "#include <unistd.h>" >> $(NCURSES_BUILD_DIR)/include/ncurses_cfg.h
 	@echo "#include <signal.h>" >> $(NCURSES_BUILD_DIR)/include/ncurses_cfg.h
 	@echo "#include <stdlib.h>" >> $(NCURSES_BUILD_DIR)/include/ncurses_cfg.h
-	@sed -i '' 's/mkdir $$@/mkdir -p $$@/g' $(NCURSES_BUILD_DIR)/ncurses/Makefile 2>/dev/null || sed -i 's/mkdir $$@/mkdir -p $$@/g' $(NCURSES_BUILD_DIR)/ncurses/Makefile 2>/dev/null || true
+	@sed -i.bak 's/mkdir $$@/mkdir -p $$@/g' $(NCURSES_BUILD_DIR)/ncurses/Makefile && rm -f $(NCURSES_BUILD_DIR)/ncurses/Makefile.bak
 
 $(NCURSES_BUILD_DIR):
 	@mkdir -p $@
@@ -106,7 +126,7 @@ $(NCURSES_BUILD_DIR):
 $(LIBNCURSES_A): $(NCURSES_BUILD_DIR)/Makefile | $(LIBC_A) $(CRT0_O)
 	@echo "  [GEN-NCURSES-FALLBACKS] Generowanie wbudowanych terminali (xterm-256color, vt100)..."
 	@python3 scripts/generate_ncurses_fallbacks.py $(NCURSES_BUILD_DIR)/ncurses/fallback.c
-	@sed -i '' 's/mkdir $$@/mkdir -p $$@/g' $(NCURSES_BUILD_DIR)/ncurses/Makefile 2>/dev/null || sed -i 's/mkdir $$@/mkdir -p $$@/g' $(NCURSES_BUILD_DIR)/ncurses/Makefile 2>/dev/null || true
+	@sed -i.bak 's/mkdir $$@/mkdir -p $$@/g' $(NCURSES_BUILD_DIR)/ncurses/Makefile && rm -f $(NCURSES_BUILD_DIR)/ncurses/Makefile.bak
 	@echo "  [MAKE-NCURSES] Kompilacja GNU Ncurses (-j$(JOBS))..."
 	@$(MAKE) -j$(JOBS) -C $(NCURSES_BUILD_DIR)/include
 	@$(MAKE) -j$(JOBS) -C $(NCURSES_BUILD_DIR)/ncurses
@@ -153,7 +173,7 @@ $(ROOTFS_DIR)/bin/nano: $(ROOTFS_DIR)/usr/bin/nano
 # ==============================================================================
 third_party/file/configure:
 	@echo "  [PRECONF-FILE] Generowanie configure dla GNU file..."
-	@cd third_party/file && autoreconf -fi || true
+	@cd third_party/file && autoreconf -fi
 
 $(FILE_BUILD_DIR)/Makefile: third_party/file/configure | $(SYSROOT_STAMP) $(FILE_BUILD_DIR)
 	@echo "  [CONF-FILE] Konfiguracja GNU file (Autotools cross-compile)..."
@@ -431,7 +451,7 @@ $(ROOTFS_DIR)/usr/lib/libXdmcp.so: $(XDMCP_OBJS) | $(SYSROOT_STAMP) $(ROOTFS_DIR
 # ==============================================================================
 third_party/libxcb/configure: third_party/libxcb/configure.ac
 	@echo "  [PRECONF-LIBXCB] Generowanie configure dla libxcb..."
-	@cd third_party/libxcb && autoreconf -fi -I ../util-macros $(ACLOCAL_EXTRA_DIRS) 2>/dev/null || true
+	@cd third_party/libxcb && autoreconf -fi -I ../util-macros $(ACLOCAL_EXTRA_DIRS)
 
 $(BUILD_DIR)/third_party/libxcb/Makefile: third_party/libxcb/configure | $(ROOTFS_DIR)/usr/lib/libXau.so $(ROOTFS_DIR)/usr/lib/libXdmcp.so $(SYSROOT_STAMP)
 	@mkdir -p $(BUILD_DIR)/third_party/libxcb
@@ -475,7 +495,7 @@ $(ROOTFS_DIR)/usr/lib/libxcb.so: $(BUILD_DIR)/third_party/libxcb/Makefile
 # ==============================================================================
 third_party/libX11/configure: third_party/libX11/configure.ac
 	@echo "  [PRECONF-LIBX11] Generowanie configure dla libX11..."
-	@cd third_party/libX11 && autoreconf -fi -I ../util-macros -I ../xtrans $(ACLOCAL_EXTRA_DIRS) 2>/dev/null || true
+	@cd third_party/libX11 && autoreconf -fi -I ../util-macros -I ../xtrans $(ACLOCAL_EXTRA_DIRS)
 
 $(BUILD_DIR)/third_party/libX11/Makefile: third_party/libX11/configure | $(ROOTFS_DIR)/usr/lib/libxcb.so $(ROOTFS_DIR)/usr/lib/libXau.so $(ROOTFS_DIR)/usr/lib/libXdmcp.so $(SYSROOT_STAMP)
 	@mkdir -p $(BUILD_DIR)/third_party/libX11 $(SYSROOT_DIR)/usr/include/X11 $(SYSROOT_DIR)/usr/include/xcb
@@ -599,7 +619,7 @@ $(ROOTFS_DIR)/usr/lib/libfontenc.so: $(FONTENC_OBJS) | $(LIBZ_A) $(SYSROOT_STAMP
 third_party/libXfont2/configure: third_party/libXfont2/configure.ac
 	@echo "  [PRECONF-LIBXFONT2] Generowanie configure dla libXfont2..."
 	@mkdir -p third_party/libXfont2/m4
-	@cd third_party/libXfont2 && autoreconf -fi -I ../util-macros -I ../xtrans -I ../font-util $(ACLOCAL_EXTRA_DIRS) 2>/dev/null || true
+	@cd third_party/libXfont2 && autoreconf -fi -I ../util-macros -I ../xtrans -I ../font-util $(ACLOCAL_EXTRA_DIRS)
 
 $(BUILD_DIR)/third_party/libXfont2/Makefile: third_party/libXfont2/configure | $(ROOTFS_DIR)/usr/lib/libfontenc.so $(LIBZ_A) $(SYSROOT_STAMP)
 	@mkdir -p $(BUILD_DIR)/third_party/libXfont2
@@ -685,7 +705,8 @@ $(ROOTFS_DIR)/usr/lib/libdrm.so: $(BUILD_DIR)/szpontos_cross.ini | $(SYSROOT_STA
 	@echo "  [NINJA-LIBDRM] Kompilacja libdrm..."
 	@ninja -j$(JOBS) -C $(LIBDRM_BUILD_DIR)
 	@rm -f $(SYSROOT_DIR)/usr/lib/libdrm.so
-	@DESTDIR=$(SYSROOT_DIR) ninja -j$(JOBS) -C $(LIBDRM_BUILD_DIR) install >/dev/null 2>&1 || true
+	@DESTDIR=$(SYSROOT_DIR) ninja -j$(JOBS) -C $(LIBDRM_BUILD_DIR) install
+	@ls $(SYSROOT_DIR)/usr/lib/libdrm.so* >/dev/null || { echo "  [ERR] libdrm install nie utworzyl libdrm.so*"; exit 1; }
 	@mkdir -p $(SYSROOT_DIR)/usr/include/drm $(SYSROOT_DIR)/usr/include/libdrm
 	@cp -f $(SYSROOT_DIR)/usr/include/libdrm/*.h $(SYSROOT_DIR)/usr/include/drm/ 2>/dev/null || true
 	@cp -f $(SYSROOT_DIR)/usr/include/xf86drm*.h $(SYSROOT_DIR)/usr/include/libdrm/ 2>/dev/null || true
@@ -826,19 +847,18 @@ $(ROOTFS_DIR)/usr/lib/libharfbuzz.so: $(BUILD_DIR)/third_party/harfbuzz/harfbuzz
 $(ROOTFS_DIR)/usr/lib/libcairo.so: $(ROOTFS_DIR)/usr/lib/libpixman-1.so $(ROOTFS_DIR)/usr/lib/libfreetype.so $(ROOTFS_DIR)/usr/lib/libX11.so
 	@mkdir -p $(SYSROOT_DIR)/usr/lib $(ROOTFS_DIR)/usr/lib
 	@if [ ! -f $(BUILD_DIR)/third_party/cairo/src/libcairo.so.2.11800.0 ]; then \
-		ninja -C $(BUILD_DIR)/third_party/cairo src/libcairo.so.2.11800.0 2>/dev/null || true; \
+		ninja -C $(BUILD_DIR)/third_party/cairo src/libcairo.so.2.11800.0; \
 	fi
-	@if [ -f $(BUILD_DIR)/third_party/cairo/src/libcairo.so.2.11800.0 ]; then \
-		cp -f $(BUILD_DIR)/third_party/cairo/src/libcairo.so.2.11800.0 $(SYSROOT_DIR)/usr/lib/ && \
+	@test -f $(BUILD_DIR)/third_party/cairo/src/libcairo.so.2.11800.0 || { echo "  [ERR] cairo build nie utworzyl libcairo.so.2.11800.0"; exit 1; }
+	@cp -f $(BUILD_DIR)/third_party/cairo/src/libcairo.so.2.11800.0 $(SYSROOT_DIR)/usr/lib/ && \
 		ln -sf libcairo.so.2.11800.0 $(SYSROOT_DIR)/usr/lib/libcairo.so.2 && \
 		ln -sf libcairo.so.2.11800.0 $(SYSROOT_DIR)/usr/lib/libcairo.so && \
 		cp -f $(BUILD_DIR)/third_party/cairo/src/libcairo.so.2.11800.0 $(ROOTFS_DIR)/usr/lib/ && \
 		ln -sf libcairo.so.2.11800.0 $(ROOTFS_DIR)/usr/lib/libcairo.so.2 && \
 		ln -sf libcairo.so.2.11800.0 $(ROOTFS_DIR)/usr/lib/libcairo.so && \
 		mkdir -p $(SYSROOT_DIR)/usr/include/cairo && \
-		cp -rf third_party/cairo/src/cairo*.h $(SYSROOT_DIR)/usr/include/cairo/ 2>/dev/null || true && \
-		cp -rf $(BUILD_DIR)/third_party/cairo/src/cairo-features.h $(SYSROOT_DIR)/usr/include/cairo/ 2>/dev/null || true; \
-	fi
+		cp -rf third_party/cairo/src/cairo*.h $(SYSROOT_DIR)/usr/include/cairo/ && \
+		cp -rf $(BUILD_DIR)/third_party/cairo/src/cairo-features.h $(SYSROOT_DIR)/usr/include/cairo/
 
 # ==============================================================================
 # libICE Target
@@ -1399,7 +1419,7 @@ $(ROOTFS_DIR)/lib/libssl.so: $(ROOTFS_DIR)/usr/lib/libssl.so
 # ==============================================================================
 third_party/curl/configure: third_party/curl/configure.ac
 	@echo "  [PRECONF-CURL] Generowanie configure dla cURL..."
-	@cd third_party/curl && autoreconf -fi 2>/dev/null || true
+	@cd third_party/curl && autoreconf -fi
 
 $(CURL_BUILD_DIR)/Makefile: third_party/curl/configure | $(ROOTFS_DIR)/usr/lib/libssl.so $(ROOTFS_DIR)/usr/lib/libcrypto.so $(LIBZ_A) $(SYSROOT_STAMP) $(CURL_BUILD_DIR)
 	@echo "  [CONF-CURL] Konfiguracja cURL (Autotools cross-compile z OpenSSL)..."
@@ -1465,8 +1485,8 @@ $(ROOTFS_DIR)/lib/libcurl.so: $(ROOTFS_DIR)/usr/lib/libcurl.so
 $(ROOTFS_DIR)/usr/bin/curl: $(ROOTFS_DIR)/usr/lib/libcurl.so $(ROOTFS_DIR)/usr/lib/libssl.so $(ROOTFS_DIR)/usr/lib/libcrypto.so $(LIBZ_A) $(CRT0_O) | $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/usr/bin $(ROOTFS_DIR)/bin
 	@echo "  [MAKE-CURL] Kompilacja narzędzia CLI cURL..."
-	@$(MAKE) -j$(JOBS) -C $(CURL_BUILD_DIR)/src curl-config2setopts.o curl-tool_main.o 2>/dev/null || true
-	@$(MAKE) -j$(JOBS) -C $(CURL_BUILD_DIR)/src curl 2>/dev/null || true
+	@$(MAKE) -j$(JOBS) -C $(CURL_BUILD_DIR)/src curl-config2setopts.o curl-tool_main.o
+	@$(MAKE) -j$(JOBS) -C $(CURL_BUILD_DIR)/src curl
 	@$(CC) $(USER_CFLAGS) -nostdlib $(abspath $(SYSROOT_DIR))/usr/lib/crt0.o -o $@ \
 	    $(CURL_BUILD_DIR)/src/curl-*.o \
 	    $(CURL_BUILD_DIR)/src/toolx/curl-*.o \
@@ -1509,12 +1529,12 @@ $(OPENSSH_BUILD_DIR)/Makefile: third_party/openssh/configure | $(ROOTFS_DIR)/usr
 	    CPPFLAGS="-isystem $(abspath $(SYSROOT_DIR))/usr/include" \
 	    LDFLAGS="-nostdlib $(abspath $(SYSROOT_DIR))/usr/lib/crt0.o -L$(abspath $(SYSROOT_DIR))/usr/lib -B$(abspath $(SYSROOT_DIR))/usr/lib" \
 	    LIBS="-lssl -lcrypto -lz -lc -lm"
-	@sed -i '' 's|/\* #undef HAVE_BZERO \*/|#define HAVE_BZERO 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_BZERO \*/|#define HAVE_BZERO 1|' $(OPENSSH_BUILD_DIR)/config.h
-	@sed -i '' 's|/\* #undef HAVE_FSTATVFS \*/|#define HAVE_FSTATVFS 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_FSTATVFS \*/|#define HAVE_FSTATVFS 1|' $(OPENSSH_BUILD_DIR)/config.h
-	@sed -i '' 's|/\* #undef HAVE_SYS_MOUNT_H \*/|#define HAVE_SYS_MOUNT_H 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_SYS_MOUNT_H \*/|#define HAVE_SYS_MOUNT_H 1|' $(OPENSSH_BUILD_DIR)/config.h
-	@sed -i '' 's|/\* #undef HAVE_SETRESUID \*/|#define HAVE_SETRESUID 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_SETRESUID \*/|#define HAVE_SETRESUID 1|' $(OPENSSH_BUILD_DIR)/config.h
-	@sed -i '' 's|/\* #undef HAVE_SETRESGID \*/|#define HAVE_SETRESGID 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef HAVE_SETRESGID \*/|#define HAVE_SETRESGID 1|' $(OPENSSH_BUILD_DIR)/config.h
-	@sed -i '' 's|/\* #undef NO_UID_RESTORATION_TEST \*/|#define NO_UID_RESTORATION_TEST 1|' $(OPENSSH_BUILD_DIR)/config.h 2>/dev/null || sed -i 's|/\* #undef NO_UID_RESTORATION_TEST \*/|#define NO_UID_RESTORATION_TEST 1|' $(OPENSSH_BUILD_DIR)/config.h
+	@sed -i.bak 's|/\* #undef HAVE_BZERO \*/|#define HAVE_BZERO 1|' $(OPENSSH_BUILD_DIR)/config.h && rm -f $(OPENSSH_BUILD_DIR)/config.h.bak
+	@sed -i.bak 's|/\* #undef HAVE_FSTATVFS \*/|#define HAVE_FSTATVFS 1|' $(OPENSSH_BUILD_DIR)/config.h && rm -f $(OPENSSH_BUILD_DIR)/config.h.bak
+	@sed -i.bak 's|/\* #undef HAVE_SYS_MOUNT_H \*/|#define HAVE_SYS_MOUNT_H 1|' $(OPENSSH_BUILD_DIR)/config.h && rm -f $(OPENSSH_BUILD_DIR)/config.h.bak
+	@sed -i.bak 's|/\* #undef HAVE_SETRESUID \*/|#define HAVE_SETRESUID 1|' $(OPENSSH_BUILD_DIR)/config.h && rm -f $(OPENSSH_BUILD_DIR)/config.h.bak
+	@sed -i.bak 's|/\* #undef HAVE_SETRESGID \*/|#define HAVE_SETRESGID 1|' $(OPENSSH_BUILD_DIR)/config.h && rm -f $(OPENSSH_BUILD_DIR)/config.h.bak
+	@sed -i.bak 's|/\* #undef NO_UID_RESTORATION_TEST \*/|#define NO_UID_RESTORATION_TEST 1|' $(OPENSSH_BUILD_DIR)/config.h && rm -f $(OPENSSH_BUILD_DIR)/config.h.bak
 $(ROOTFS_DIR)/usr/sbin/sshd: $(OPENSSH_BUILD_DIR)/Makefile | $(ROOTFS_DIR)/usr/lib/libssl.so $(ROOTFS_DIR)/usr/lib/libcrypto.so $(LIBZ_A) $(SYSROOT_STAMP) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/usr/sbin $(ROOTFS_DIR)/usr/bin $(ROOTFS_DIR)/usr/libexec $(ROOTFS_DIR)/bin $(ROOTFS_DIR)/etc/ssh $(ROOTFS_DIR)/var/empty
 	@echo "  [MAKE-OPENSSH] Kompilacja OpenSSH (sshd, sshd-session, sshd-auth, ssh-keygen, ssh)..."
@@ -1548,7 +1568,7 @@ cross-ini: $(BUILD_DIR)/szpontos_cross.ini
 
 third_party/xkbcomp/configure: third_party/xkbcomp/configure.ac
 	@echo "  [PRECONF-XKBCOMP] Generowanie configure dla xkbcomp..."
-	@cd third_party/xkbcomp && autoreconf -fi -I ../util-macros $(ACLOCAL_EXTRA_DIRS) 2>/dev/null || true
+	@cd third_party/xkbcomp && autoreconf -fi -I ../util-macros $(ACLOCAL_EXTRA_DIRS)
 
 $(XKBCOMP_BUILD_DIR)/Makefile: third_party/xkbcomp/configure | $(ROOTFS_DIR)/usr/lib/libxkbfile.so $(ROOTFS_DIR)/usr/lib/libX11.so $(SYSROOT_STAMP) $(LIBC_SO) $(CRT0_O)
 	@mkdir -p $(XKBCOMP_BUILD_DIR)
@@ -1558,7 +1578,7 @@ $(XKBCOMP_BUILD_DIR)/Makefile: third_party/xkbcomp/configure | $(ROOTFS_DIR)/usr
 	$(abspath third_party/xkbcomp)/configure \
 	    --host=x86_64-elf \
 	    --prefix=/usr \
-	    --recheck 2>/dev/null || true
+	    --recheck || echo "  [WARN] xkbcomp --recheck pominięty (czysty build, kontynuuję pełną konfigurację)..."
 	@cd $(XKBCOMP_BUILD_DIR) && \
 	PKG_CONFIG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig" \
 	$(abspath third_party/xkbcomp)/configure \
@@ -1585,7 +1605,8 @@ $(XKBCONFIG_BUILD_DIR)/build.ninja: | $(SYSROOT_STAMP)
 
 $(ROOTFS_DIR)/usr/share/X11/xkb: $(XKBCONFIG_BUILD_DIR)/build.ninja | $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/usr/share $(ROOTFS_DIR)/usr/share/X11
-	@DESTDIR=$(SYSROOT_DIR) ninja -j$(JOBS) -C $(XKBCONFIG_BUILD_DIR) install >/dev/null 2>&1 || true
+	@DESTDIR=$(SYSROOT_DIR) ninja -j$(JOBS) -C $(XKBCONFIG_BUILD_DIR) install
+	@test -d $(SYSROOT_DIR)/usr/share/xkeyboard-config-2 || { echo "  [ERR] xkeyboard-config install nie utworzyl share/xkeyboard-config-2"; exit 1; }
 	@cp -rf $(SYSROOT_DIR)/usr/share/xkeyboard-config-2 $(ROOTFS_DIR)/usr/share/
 	@cd $(ROOTFS_DIR)/usr/share/X11 && ln -sfn ../xkeyboard-config-2 xkb
 
@@ -1602,7 +1623,8 @@ $(ROOTFS_DIR)/usr/lib/libepoxy.so: $(BUILD_DIR)/szpontos_cross.ini | $(ROOTFS_DI
 	fi
 	@echo "  [NINJA-EPOXY] Kompilacja libepoxy..."
 	@ninja -j$(JOBS) -C $(EPOXY_BUILD_DIR)
-	@DESTDIR=$(SYSROOT_DIR) ninja -j$(JOBS) -C $(EPOXY_BUILD_DIR) install >/dev/null 2>&1 || true
+	@DESTDIR=$(SYSROOT_DIR) ninja -j$(JOBS) -C $(EPOXY_BUILD_DIR) install
+	@ls $(SYSROOT_DIR)/usr/lib/libepoxy.so* >/dev/null || { echo "  [ERR] libepoxy install nie utworzyl libepoxy.so"; exit 1; }
 	@cp -a $(SYSROOT_DIR)/usr/lib/libepoxy.so* $(ROOTFS_DIR)/usr/lib/
 	@echo "  [OK]  libepoxy installed to sysroot and rootfs"
 
@@ -1691,21 +1713,20 @@ $(XSERVER_BUILD_DIR)/build.ninja: $(BUILD_DIR)/szpontos_cross.ini | $(ROOTFS_DIR
 	    -Dxkb_bin_dir=/usr/bin \
 	    -Dxkb_output_dir=/var/lib/xkb
 	@if [ -f $(XSERVER_BUILD_DIR)/dix-config.h ]; then \
-		sed -i '' -e 's|#define DRI_DRIVER_PATH ".*"|#define DRI_DRIVER_PATH "/usr/lib/dri:/lib/dri"|g' $(XSERVER_BUILD_DIR)/dix-config.h 2>/dev/null || \
-		sed -i -e 's|#define DRI_DRIVER_PATH ".*"|#define DRI_DRIVER_PATH "/usr/lib/dri:/lib/dri"|g' $(XSERVER_BUILD_DIR)/dix-config.h ; \
+		sed -i.bak -e 's|#define DRI_DRIVER_PATH ".*"|#define DRI_DRIVER_PATH "/usr/lib/dri:/lib/dri"|g' $(XSERVER_BUILD_DIR)/dix-config.h && rm -f $(XSERVER_BUILD_DIR)/dix-config.h.bak; \
 	fi
 
 $(XSERVER_BUILD_DIR)/hw/xfree86/Xorg: $(XSERVER_BUILD_DIR)/build.ninja
 	@echo "  [NINJA-XORG] Kompilacja X.Org Server (ninja -j$(JOBS))..."
 	@if [ -f $(XSERVER_BUILD_DIR)/dix-config.h ]; then \
-		sed -i '' -e 's|#define DRI_DRIVER_PATH ".*"|#define DRI_DRIVER_PATH "/usr/lib/dri:/lib/dri"|g' $(XSERVER_BUILD_DIR)/dix-config.h 2>/dev/null || \
-		sed -i -e 's|#define DRI_DRIVER_PATH ".*"|#define DRI_DRIVER_PATH "/usr/lib/dri:/lib/dri"|g' $(XSERVER_BUILD_DIR)/dix-config.h ; \
+		sed -i.bak -e 's|#define DRI_DRIVER_PATH ".*"|#define DRI_DRIVER_PATH "/usr/lib/dri:/lib/dri"|g' $(XSERVER_BUILD_DIR)/dix-config.h && rm -f $(XSERVER_BUILD_DIR)/dix-config.h.bak; \
 	fi
 	@ninja -j$(JOBS) -C $(XSERVER_BUILD_DIR)
 
 $(ROOTFS_DIR)/usr/bin/Xorg: $(XSERVER_BUILD_DIR)/hw/xfree86/Xorg | $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/usr/bin $(ROOTFS_DIR)/bin $(ROOTFS_DIR)/usr/lib/xorg/modules/drivers $(ROOTFS_DIR)/usr/lib/xorg/modules/xlibre-25/drivers $(ROOTFS_DIR)/etc/X11 $(ROOTFS_DIR)/var/log $(ROOTFS_DIR)/var/lib/xkb
-	@DESTDIR=$(SYSROOT_DIR) ninja -j$(JOBS) -C $(XSERVER_BUILD_DIR) install >/dev/null 2>&1 || true
+	@DESTDIR=$(SYSROOT_DIR) ninja -j$(JOBS) -C $(XSERVER_BUILD_DIR) install
+	@test -f $(XSERVER_BUILD_DIR)/hw/xfree86/Xorg || { echo "  [ERR] Xorg build nie utworzyl binarki Xorg"; exit 1; }
 	@cp -f $(XSERVER_BUILD_DIR)/hw/xfree86/Xorg $(ROOTFS_DIR)/usr/bin/Xorg
 	@ln -sf /usr/bin/Xorg $(ROOTFS_DIR)/bin/Xorg
 	@ln -sf /usr/bin/Xorg $(ROOTFS_DIR)/usr/bin/X
@@ -1834,7 +1855,8 @@ $(MESA_BUILD_DIR)/src/egl/libEGL.so.1.0.0: $(MESA_BUILD_DIR)/build.ninja
 	@echo "  [NINJA-MESA] Kompilacja Mesa 3D (ninja -j$(JOBS))..."
 	@ninja -j$(JOBS) -C $(MESA_BUILD_DIR)
 	@rm -f $(SYSROOT_DIR)/usr/lib/libgbm.so $(SYSROOT_DIR)/usr/lib/libgbm.so.1
-	@DESTDIR=$(abspath $(SYSROOT_DIR)) ninja -j$(JOBS) -C $(MESA_BUILD_DIR) install >/dev/null 2>&1 || true
+	@DESTDIR=$(abspath $(SYSROOT_DIR)) ninja -j$(JOBS) -C $(MESA_BUILD_DIR) install
+	@test -f $(MESA_BUILD_DIR)/src/egl/libEGL.so.1.0.0 || { echo "  [ERR] Mesa build nie utworzyl libEGL"; exit 1; }
 
 $(ROOTFS_DIR)/usr/lib/libEGL.so: $(MESA_BUILD_DIR)/src/egl/libEGL.so.1.0.0 | $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/usr/lib $(ROOTFS_DIR)/usr/lib/dri $(ROOTFS_DIR)/usr/lib/gbm
@@ -1889,10 +1911,14 @@ ALL_THIRDPARTY_OUTPUTS := \
 	$(LIBNCURSES_A) $(LIBZ_A) $(ROOTFS_DIR)/usr/bin/nano $(ROOTFS_DIR)/usr/bin/file $(MAGIC_DB) \
 	$(ROOTFS_DIR)/usr/bin/zsh $(ROOTFS_DIR)/usr/bin/fastfetch $(ROOTFS_DIR)/usr/bin/git $(ALL_ROOTFS_SOS) \
 	$(ROOTFS_DIR)/usr/bin/xterm $(ROOTFS_DIR)/usr/bin/openssl $(ROOTFS_DIR)/usr/bin/curl $(ROOTFS_DIR)/etc/ssl/cert.pem \
-	$(ROOTFS_DIR)/usr/bin/xkbcomp $(ROOTFS_DIR)/usr/share/X11/xkb $(ROOTFS_DIR)/usr/bin/Xorg \
+	$(ROOTFS_DIR)/usr/sbin/sshd $(ROOTFS_DIR)/usr/bin/xkbcomp $(ROOTFS_DIR)/usr/share/X11/xkb $(ROOTFS_DIR)/usr/bin/Xorg \
 	$(ROOTFS_DIR)/usr/lib/xorg/modules/input/mouse_drv.so $(ROOTFS_DIR)/usr/lib/xorg/modules/input/kbd_drv.so
 
-$(THIRDPARTY_STAMP): $(ALL_THIRDPARTY_OUTPUTS)
+# NOTE (single-shot fix): third-party strictly chains after sysroot. Even though
+# individual lib rules already list SYSROOT_STAMP, this explicit dep guarantees
+# `make -j` cannot start ANY third-party configure before sysroot headers/libs
+# (libc, crt0, pkg-config shims) are fully installed.
+$(THIRDPARTY_STAMP): $(SYSROOT_STAMP) submodules-check $(ALL_THIRDPARTY_OUTPUTS)
 	@mkdir -p $(dir $@)
 	@touch $@
 

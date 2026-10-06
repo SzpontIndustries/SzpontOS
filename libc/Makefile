@@ -175,6 +175,7 @@ $(SYSROOT_STAMP): $(LIBC_A) $(CRT0_O) $(CRTI_O) $(CRTN_O) $(BUILD_DIR)/libc/dso_
 	@cp -f $(ROOT_DIR)/third_party/pixman/pixman/*.h $(SYSROOT_DIR)/usr/include/pixman-1/ 2>/dev/null || true
 	@cp -f $(ROOT_DIR)/third_party/pixman/pixman/*.h $(SYSROOT_DIR)/usr/include/ 2>/dev/null || true
 	@for pcin in $(ROOT_DIR)/third_party/xorgproto/*.pc.in; do \
+	    [ -f "$$pcin" ] || continue; \
 	    pcname=$$(basename $$pcin .in); \
 	    sed -e 's|@prefix@|/usr|g' \
 	        -e 's|@exec_prefix@|/usr|g' \

@@ -10,8 +10,9 @@ MODULES := \
 
 all: modules
 
+# NOTE (single-shot fix): MODULES_STAMP owner is ONLY top-level Makefile.
+# This sub-makefile builds .sko files but never touches the stamp.
 modules: $(MODULES)
-	@mkdir -p $(dir $(MODULES_STAMP)) && touch $(MODULES_STAMP)
 
 $(MODULE_DIR)/hello.sko: $(ROOT_DIR)/modules/hello/hello.c | $(ROOTFS_DIR)
 	@mkdir -p $(MODULE_DIR)

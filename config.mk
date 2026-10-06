@@ -14,16 +14,41 @@ ARCH    := x86_64
 
 # ==============================================================================
 # Parallel Build Configuration
+# NOTE (single-shot fix): top-level orchestration is intentionally SERIAL.
+# Parallelism lives ONLY inside subsystem builds (explicit -j$(JOBS) in
+# sub-make/ninja recipes). Auto-injecting -j into MAKEFLAGS caused races:
+# sysroot headers vs third-party configure vs userland compile vs ISO
+# packaging running concurrently, requiring repeated `make` invocations.
+# Do NOT re-add `MAKEFLAGS += -j` here. Use `make -j<N>` explicitly only
+# for debugging; supported path is serial orchestration + parallel leaves.
 # ==============================================================================
 NPROC := $(shell nproc 2>/dev/null || sysctl -n hw.logicalcpu 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
 JOBS  ?= $(NPROC)
 
-# Set default parallel jobs for top-level make if not explicitly provided
-ifeq ($(filter -j%,$(MAKEFLAGS)),)
-ifeq ($(filter --jobs%,$(MAKEFLAGS)),)
-    MAKEFLAGS += -j$(JOBS)
+# Synchronized output so parallel leaf builds stay readable (GNU make >= 4.0
+# ONLY - macOS ships make 3.81 which aborts on unknown --output-sync).
+# Version guard: MAKE_VERSION is e.g. "3.81" or "4.4.1".
+MAKE_GE_4 := $(shell expr "$(MAKE_VERSION)" ">=" "4.0" 2>/dev/null || echo 0)
+ifeq ($(MAKE_GE_4),1)
+ifeq ($(filter --output-sync%,$(MAKEFLAGS)),)
+MAKEFLAGS += --output-sync=recurse
 endif
 endif
+
+# Portable in-place sed (works on both GNU and BSD/macOS sed).
+# Usage: $(SED_INPLACE) 's/foo/bar/' <file>
+# Implemented via backup suffix + immediate cleanup (atomic on both seds).
+SED_INPLACE := sed -i.bak
+SED_INPLACE_CLEAN := find . -name '*.bak' -delete 2>/dev/null; true
+# Helper: portable `sed -i` replacement without backup litter.
+# Call as: $(call sed_inplace,EXPR,FILE)
+define sed_inplace
+	sed -i.bak $(1) $(2) && rm -f $(2).bak
+endef
+
+# Directory for configure/meson serialization locks (mkdir-based, portable
+# across macOS/Linux, no `flock` dependency).
+BUILD_LOCK_DIR := $(ROOT_DIR)/build/.locks
 
 # ==============================================================================
 # Toolchain Auto-detection (Prefer GCC, fallback to Clang)
