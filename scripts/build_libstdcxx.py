@@ -311,14 +311,14 @@ def main():
     os.makedirs(os.path.join(sysroot_dir, "usr", "lib"), exist_ok=True)
     os.makedirs(os.path.join(rootfs_dir, "lib"), exist_ok=True)
 
-    # 1. Install headers
+    # 1. Install headers (UNCONDITIONAL - single-shot fix: a stale libstdc++.so
+    # with a wiped sysroot previously skipped this via `if not exists`, leaving
+    # no C++ headers and failing downstream C++ builds like mesa's <thread>).
     script_dir = os.path.dirname(os.path.abspath(__file__))
     install_script = os.path.join(script_dir, "install_libstdcxx_headers.py")
     include_cxx = os.path.join(sysroot_dir, "usr", "include", "c++")
-    
-    if not os.path.exists(os.path.join(include_cxx, "bits", "c++config.h")):
-        print("  [CXX-HEADERS] Installing libstdc++ headers into sysroot...")
-        subprocess.check_call([sys.executable, install_script, src_dir, include_cxx])
+    print("  [CXX-HEADERS] Installing libstdc++ headers into sysroot...")
+    subprocess.check_call([sys.executable, install_script, src_dir, include_cxx])
 
     # 2. Out-of-tree generated helpers
     unwind_pe = os.path.join(build_dir, "unwind-pe.h")

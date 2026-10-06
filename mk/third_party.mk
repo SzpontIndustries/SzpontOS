@@ -5,12 +5,21 @@
 # Git submodules guard (single-shot fix): cryptic "No rule to make target
 # `third_party/*/configure'" meant empty submodule dirs. Fail fast with a
 # clear hint instead of requiring repeated `make` to discover it.
+# NOTE: plain `git submodule update` does NOT repair an EMPTIED worktree
+# (files wiped, HEAD==pin): it compares SHAs only and skips. Such damage
+# needs `git -C <dir> reset --hard HEAD`. The check below detects it.
 # ==============================================================================
 .PHONY: submodules-check
 submodules-check:
-	@if [ ! -f third_party/xorgproto/configure.ac ] && [ ! -d third_party/xorgproto/include ]; then \
-		echo "  [ERR] third_party/* wygląda na puste (submodules nie zainicjalizowane)."; \
-		echo "        Uruchom: git submodule update --init --recursive"; \
+	@missing=""; \
+	for d in third_party/*/; do \
+		if [ -d "$$d" ] && [ -z "$$(ls -A "$$d" | grep -v '^\.git$$')" ]; then \
+			missing="$$missing $$d"; \
+		fi; \
+	done; \
+	if [ -n "$$missing" ]; then \
+		echo "  [ERR] Puste worktree submodulow (zwykly submodule update tego NIE naprawi):$$missing"; \
+		echo "        Napraw: for d in$$missing; do git -C \$$d reset --hard HEAD; done"; \
 		exit 1; \
 	fi
 
@@ -272,7 +281,7 @@ $(ROOTFS_DIR)/bin/zsh: $(ROOTFS_DIR)/usr/bin/zsh
 # ==============================================================================
 # Fastfetch (CMake cross-compile)
 # ==============================================================================
-$(FASTFETCH_BUILD_DIR)/Makefile: third_party/fastfetch/CMakeLists.txt | $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(FASTFETCH_BUILD_DIR)
+$(FASTFETCH_BUILD_DIR)/Makefile: third_party/fastfetch/CMakeLists.txt $(ROOTFS_DIR)/usr/lib/libdrm.so | $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(FASTFETCH_BUILD_DIR)
 	@echo "  [CONF-FASTFETCH] Konfiguracja Fastfetch (CMake cross-compile)..."
 	@rm -f $(FASTFETCH_BUILD_DIR)/CMakeCache.txt
 	@cd $(FASTFETCH_BUILD_DIR) && \
@@ -314,7 +323,12 @@ $(FASTFETCH_BUILD_DIR)/Makefile: third_party/fastfetch/CMakeLists.txt | $(SYSROO
 $(FASTFETCH_BUILD_DIR):
 	@mkdir -p $@
 
-$(ROOTFS_DIR)/usr/bin/fastfetch: $(FASTFETCH_BUILD_DIR)/Makefile | $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(ROOTFS_DIR)
+# NOTE (single-shot fix): fastfetch sniffs <drm/drm.h> at COMPILE time
+# (gpu.h/gpu_drm.c use `#if FF_HAVE_DRM || __has_include(<drm/drm.h>)`) even
+# with -DENABLE_DRM=OFF, so libdrm headers must be installed FIRST. Without
+# this dep fastfetch compiled before libdrm and died with implicit-declaration
+# errors for ffDrmDetect* (hard error on GCC 14+).
+$(ROOTFS_DIR)/usr/bin/fastfetch: $(FASTFETCH_BUILD_DIR)/Makefile $(ROOTFS_DIR)/usr/lib/libdrm.so | $(SYSROOT_STAMP) $(LIBC_A) $(CRT0_O) $(LIBM_A) $(LIBDL_A) $(ROOTFS_DIR)
 	@mkdir -p $(ROOTFS_DIR)/usr/bin $(ROOTFS_DIR)/bin
 	@echo "  [MAKE-FASTFETCH] Kompilacja narzędzia Fastfetch (-j$(JOBS))..."
 	@$(MAKE) -j$(JOBS) -C $(FASTFETCH_BUILD_DIR) fastfetch
@@ -694,7 +708,12 @@ libxshmfence: $(ROOTFS_DIR)/usr/lib/libxshmfence.so
 # ==============================================================================
 LIBDRM_BUILD_DIR := $(BUILD_DIR)/third_party/libdrm
 
-$(ROOTFS_DIR)/usr/lib/libdrm.so: $(BUILD_DIR)/szpontos_cross.ini | $(SYSROOT_STAMP) $(LIBC_SO) $(ROOTFS_DIR)
+# NOTE (single-shot fix): libdrm's intel backend includes <pciaccess.h> at
+# COMPILE time, so libpciaccess must be installed FIRST. (Sysroot even ships a
+# pciaccess.pc stub, so meson setup happily enables intel and only the compile
+# fails - same header-sniffing hazard as fastfetch/drm.) Normal dep, not
+# order-only: a libpciaccess header change must trigger a libdrm rebuild.
+$(ROOTFS_DIR)/usr/lib/libdrm.so: $(BUILD_DIR)/szpontos_cross.ini $(ROOTFS_DIR)/usr/lib/libpciaccess.so | $(SYSROOT_STAMP) $(LIBC_SO) $(ROOTFS_DIR)
 	@mkdir -p $(LIBDRM_BUILD_DIR)
 	@echo "  [CONF-LIBDRM] Konfiguracja official libdrm (meson cross-compile)..."
 	@if [ ! -f $(LIBDRM_BUILD_DIR)/build.ninja ]; then \
@@ -827,6 +846,8 @@ $(ROOTFS_DIR)/usr/lib/libfreetype.so: $(FREETYPE_OBJS) | $(ROOTFS_DIR)/usr/lib/l
 	@ln -sf libfreetype.so.6.20.1 $(ROOTFS_DIR)/usr/lib/libfreetype.so
 	@cp -rf third_party/freetype/include/* $(SYSROOT_DIR)/usr/include/freetype2/ 2>/dev/null || true
 	@cp -rf third_party/freetype/include/* $(SYSROOT_DIR)/usr/include/ 2>/dev/null || true
+	@printf "prefix=/usr\nexec_prefix=\$${prefix}\nlibdir=\$${exec_prefix}/lib\nincludedir=\$${prefix}/include\n\nName: freetype2\nDescription: FreeType 2 font engine\nVersion: 2.13.2\nLibs: -L\$${libdir} -lfreetype\nCflags: -I\$${includedir}/freetype2 -I\$${includedir}\n" > $(SYSROOT_DIR)/usr/lib/pkgconfig/freetype2.pc
+	@cp -f $(SYSROOT_DIR)/usr/lib/pkgconfig/freetype2.pc $(SYSROOT_DIR)/usr/share/pkgconfig/ 2>/dev/null || true
 
 # ==============================================================================
 # HarfBuzz Target
@@ -851,8 +872,32 @@ $(ROOTFS_DIR)/usr/lib/libharfbuzz.so: $(BUILD_DIR)/third_party/harfbuzz/harfbuzz
 # ==============================================================================
 # Cairo Target
 # ==============================================================================
-$(ROOTFS_DIR)/usr/lib/libcairo.so: $(ROOTFS_DIR)/usr/lib/libpixman-1.so $(ROOTFS_DIR)/usr/lib/libfreetype.so $(ROOTFS_DIR)/usr/lib/libX11.so
-	@mkdir -p $(SYSROOT_DIR)/usr/lib $(ROOTFS_DIR)/usr/lib
+# NOTE (single-shot fix): this recipe used to jump straight to
+# `ninja -C $(BUILD_DIR)/third_party/cairo`, assuming a pre-configured tree.
+# On a clean build/ that directory does not exist -> `ninja: fatal: chdir`
+# (another "never builds first try" instance). The meson setup below makes
+# cairo self-configuring like libdrm/mesa/xserver. Backends limited to what
+# SzpontOS ports (no fontconfig/png/glib: unported).
+$(ROOTFS_DIR)/usr/lib/libcairo.so: $(ROOTFS_DIR)/usr/lib/libpixman-1.so $(ROOTFS_DIR)/usr/lib/libfreetype.so $(ROOTFS_DIR)/usr/lib/libX11.so $(BUILD_DIR)/szpontos_cross.ini
+	@mkdir -p $(SYSROOT_DIR)/usr/lib $(ROOTFS_DIR)/usr/lib $(BUILD_DIR)/third_party/cairo
+	@if [ ! -f $(BUILD_DIR)/third_party/cairo/build.ninja ]; then \
+		echo "  [CONF-CAIRO] Konfiguracja cairo (meson cross-compile)..."; \
+		PKG_CONFIG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig" \
+		meson setup $(BUILD_DIR)/third_party/cairo third_party/cairo \
+		    --cross-file $(BUILD_DIR)/szpontos_cross.ini \
+		    -Dprefix=/usr \
+		    -Dfontconfig=disabled \
+		    -Dfreetype=enabled \
+		    -Dpng=disabled \
+		    -Dzlib=enabled \
+		    -Dxlib=enabled \
+		    -Dxcb=enabled \
+		    -Dtests=disabled \
+		    -Dglib=disabled \
+		    -Dspectre=disabled \
+		    -Dsymbol-lookup=disabled \
+		    -Dgtk_doc=false; \
+	fi
 	@if [ ! -f $(BUILD_DIR)/third_party/cairo/src/libcairo.so.2.11800.0 ]; then \
 		ninja -C $(BUILD_DIR)/third_party/cairo src/libcairo.so.2.11800.0; \
 	fi
@@ -1461,12 +1506,17 @@ $(CURL_BUILD_DIR)/Makefile: third_party/curl/configure | $(ROOTFS_DIR)/usr/lib/l
 	    --disable-threaded-resolver \
 	    --enable-http \
 	    --enable-proxy \
-	    CC="$(CC)" \
+	    CC="$(abspath $(ROOT_DIR))/scripts/szpontos-gcc" \
 	    AR="$(AR)" \
 	    RANLIB="$(RANLIB)" \
 	    CFLAGS="-O2 -ffreestanding -fno-builtin -isystem $(abspath $(SYSROOT_DIR))/usr/include -B$(abspath $(SYSROOT_DIR))/usr/lib -fPIC" \
 	    LDFLAGS="-nostdlib -L$(abspath $(SYSROOT_DIR))/usr/lib -B$(abspath $(SYSROOT_DIR))/usr/lib" \
 	    LIBS="-lssl -lcrypto -lz -lm -lc"
+# NOTE (single-shot fix): curl's configure detects host pthreads and injects
+# -pthread into its Makefiles, which x86_64-elf-gcc rejects (bare-metal cross
+# compiler). scripts/szpontos-gcc maps -pthread to -D_REENTRANT (our libc
+# provides pthread API natively, no -lpthread needed) - same wrapper already
+# used for xorg input drivers. Touch only curl; leave other ports on raw CC.
 
 $(CURL_BUILD_DIR):
 	@mkdir -p $@
@@ -1509,6 +1559,12 @@ $(ROOTFS_DIR)/bin/curl: $(ROOTFS_DIR)/usr/bin/curl
 third_party/openssh/configure: third_party/openssh/configure.ac
 	@echo "  [PRECONF-OPENSSH] Generowanie configure dla OpenSSH..."
 	@cd $(OPENSSH_SRC_DIR) && autoreconf -fi
+
+# NOTE (single-shot fix): every other out-of-tree port has a `$(XXX_BUILD_DIR):`
+# mkdir rule; openssh was missing it, so clean builds died with
+# "No rule to make target `build/third_party/openssh'".
+$(OPENSSH_BUILD_DIR):
+	@mkdir -p $@
 
 $(OPENSSH_BUILD_DIR)/Makefile: third_party/openssh/configure | $(ROOTFS_DIR)/usr/lib/libssl.so $(ROOTFS_DIR)/usr/lib/libcrypto.so $(LIBZ_A) $(SYSROOT_STAMP) $(OPENSSH_BUILD_DIR)
 	@echo "  [CONF-OPENSSH] Konfiguracja OpenSSH (Autotools cross-compile)..."
@@ -1639,6 +1695,11 @@ $(ROOTFS_DIR)/lib/libepoxy.so: $(ROOTFS_DIR)/usr/lib/libepoxy.so
 	@ln -sf /usr/lib/libepoxy.so $@ 2>/dev/null || true
 
 $(XSERVER_BUILD_DIR)/build.ninja: $(BUILD_DIR)/szpontos_cross.ini | $(ROOTFS_DIR)/usr/lib/libdrm.so $(ROOTFS_DIR)/usr/lib/libgbm.so $(ROOTFS_DIR)/usr/lib/libpixman-1.so $(ROOTFS_DIR)/usr/lib/libxkbfile.so $(ROOTFS_DIR)/usr/lib/libXfont2.so $(ROOTFS_DIR)/usr/lib/libfontenc.so $(ROOTFS_DIR)/usr/lib/libpciaccess.so $(ROOTFS_DIR)/usr/lib/libGL.so $(ROOTFS_DIR)/usr/lib/libepoxy.so $(SYSROOT_STAMP)
+# NOTE: -Dpciaccess=true is REQUIRED (was false): the modesetting driver calls
+# ms_DRICreatePCIBusID() unconditionally but defines it only under
+# XSERVER_LIBPCIACCESS, so pciaccess=false breaks the build with an implicit
+# declaration error. Our libpciaccess port satisfies the dependency.
+	@mkdir -p $(XSERVER_BUILD_DIR)
 	@mkdir -p $(XSERVER_BUILD_DIR)
 	@echo "  [CONF-XORG] Konfiguracja X.Org Server (meson cross-compile)..."
 	@PKG_CONFIG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig" \
@@ -1662,9 +1723,9 @@ $(XSERVER_BUILD_DIR)/build.ninja: $(BUILD_DIR)/szpontos_cross.ini | $(ROOTFS_DIR
 	    -Dudev_kms=false \
 	    -Dhal=false \
 	    -Dsystemd_logind=false \
-	    -Dseatd_libseat=false \
-	    -Dpciaccess=false \
-	    -Dint10=false \
+    -Dseatd_libseat=false \
+    -Dpciaccess=true \
+    -Dint10=false \
 	    -Dvgahw=false \
 	    -Dsuid_wrapper=false \
 	    -Dlibunwind=false \
@@ -1701,9 +1762,9 @@ $(XSERVER_BUILD_DIR)/build.ninja: $(BUILD_DIR)/szpontos_cross.ini | $(ROOTFS_DIR
 	    -Dudev_kms=false \
 	    -Dhal=false \
 	    -Dsystemd_logind=false \
-	    -Dseatd_libseat=false \
-	    -Dpciaccess=false \
-	    -Dint10=false \
+    -Dseatd_libseat=false \
+    -Dpciaccess=true \
+    -Dint10=false \
 	    -Dvgahw=false \
 	    -Dsuid_wrapper=false \
 	    -Dlibunwind=false \
@@ -1804,7 +1865,12 @@ $(ROOTFS_DIR)/usr/lib/xorg/modules/input/kbd_drv.so: $(KBD_OBJS) | $(ROOTFS_DIR)
 MESA_BUILD_DIR := $(BUILD_DIR)/third_party/mesa
 MESA_CROSS_FILE := $(BUILD_DIR)/szpontos_cross.ini
 
-$(MESA_BUILD_DIR)/build.ninja: $(MESA_CROSS_FILE) | $(ROOTFS_DIR)/usr/lib/libdrm.so $(ROOTFS_DIR)/usr/lib/libxshmfence.so $(ROOTFS_DIR)/usr/lib/libxcb.so $(ROOTFS_DIR)/usr/lib/libXxf86vm.so $(LIBSTDCXX_SO) $(SYSROOT_STAMP)
+# NOTE (single-shot fix): mesa's meson setup probes x11/xext/xfixes via
+# pkg-config at CONFIGURE time. Those .pc files only exist after libX11 /
+# libXext / libXfixes install, so they must be normal (ordering + rebuild)
+# deps here - not just the previous subset. Missing dep showed up as
+# `Dependency "xfixes" not found` only after libdrm+fastfetch got fixed.
+$(MESA_BUILD_DIR)/build.ninja: $(MESA_CROSS_FILE) $(ROOTFS_DIR)/usr/lib/libX11.so $(ROOTFS_DIR)/usr/lib/libXext.so $(ROOTFS_DIR)/usr/lib/libXfixes.so $(ROOTFS_DIR)/usr/lib/libXrandr.so | $(ROOTFS_DIR)/usr/lib/libdrm.so $(ROOTFS_DIR)/usr/lib/libxshmfence.so $(ROOTFS_DIR)/usr/lib/libxcb.so $(ROOTFS_DIR)/usr/lib/libXxf86vm.so $(LIBSTDCXX_SO) $(SYSROOT_STAMP)
 	@mkdir -p $(MESA_BUILD_DIR)
 	@echo "  [CONF-MESA] Konfiguracja Mesa 3D (meson cross-compile)..."
 	@PKG_CONFIG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig" \
@@ -1925,7 +1991,9 @@ ALL_THIRDPARTY_OUTPUTS := \
 # individual lib rules already list SYSROOT_STAMP, this explicit dep guarantees
 # `make -j` cannot start ANY third-party configure before sysroot headers/libs
 # (libc, crt0, pkg-config shims) are fully installed.
-$(THIRDPARTY_STAMP): $(SYSROOT_STAMP) submodules-check $(ALL_THIRDPARTY_OUTPUTS)
+# submodules-check is order-only: the check runs every time (fail-fast) but a
+# phony prereq must NOT force THIRDPARTY_STAMP out of date on every run.
+$(THIRDPARTY_STAMP): $(SYSROOT_STAMP) $(ALL_THIRDPARTY_OUTPUTS) | submodules-check
 	@mkdir -p $(dir $@)
 	@touch $@
 

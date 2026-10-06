@@ -50,6 +50,13 @@ endef
 # across macOS/Linux, no `flock` dependency).
 BUILD_LOCK_DIR := $(ROOT_DIR)/build/.locks
 
+# Third-party source trees whose headers the sysroot recipe copies
+# (libc/Makefile: xorgproto, xtrans, xcb-proto, libxcvt, pixman, util-macros).
+# Tracked as SYSROOT_STAMP prerequisites so headers that appear AFTER a stale
+# stamp (e.g. submodules populated later) trigger exactly one sysroot refresh
+# instead of phantom "missing header" failures downstream.
+SYSROOT_TP_SRCS := $(shell find $(ROOT_DIR)/third_party/xorgproto $(ROOT_DIR)/third_party/xtrans $(ROOT_DIR)/third_party/xcb-proto $(ROOT_DIR)/third_party/libxcvt $(ROOT_DIR)/third_party/pixman $(ROOT_DIR)/third_party/util-macros -type f 2>/dev/null)
+
 # ==============================================================================
 # Toolchain Auto-detection (Prefer GCC, fallback to Clang)
 # ==============================================================================

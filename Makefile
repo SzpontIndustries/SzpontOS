@@ -58,7 +58,7 @@ $(LIBC_SO): $(SYSROOT_STAMP)
 
 libc: $(SYSROOT_STAMP)
 
-$(SYSROOT_STAMP): $(LIBC_SRCS) $(ROOT_DIR)/libc/Makefile $(ROOT_DIR)/config.mk
+$(SYSROOT_STAMP): $(LIBC_SRCS) $(SYSROOT_TP_SRCS) $(ROOT_DIR)/libc/Makefile $(ROOT_DIR)/config.mk | submodules-check
 	@$(MAKE) -j$(JOBS) -C $(ROOT_DIR)/libc sysroot
 
 sysroot: $(SYSROOT_STAMP)

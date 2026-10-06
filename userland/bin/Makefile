@@ -96,7 +96,20 @@ TEST_PROGS := \
 
 .PHONY: all progs symlinks
 
+# NOTE (single-shot fix #2): keep compiled objects. Without this, make treats
+# build/userland/bin/*.o as intermediates (reachable only via chained pattern
+# rules) and DELETES them after linking, so every touch of one .c recompiled
+# AND relinked the whole directory on the next run.
+.SECONDARY:
+
 all: progs symlinks
+
+# NOTE (single-shot fix): object rules below list $(BUILD_DIR)/userland/bin as
+# an order-only prerequisite, but no rule created it - clean builds died with
+# "No rule to make target `build/userland/bin'". Every other userland
+# sub-makefile already has its equivalent mkdir rule.
+$(BUILD_DIR)/userland/bin:
+	@mkdir -p $@
 
 progs: $(BIN_PROGS) $(USR_BIN_PROGS) $(TEST_PROGS)
 

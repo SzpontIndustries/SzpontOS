@@ -96,6 +96,7 @@ FILE *tmpfile(void);
 
 ssize_t getdelim(char **lineptr, size_t *n, int delimiter, FILE *stream);
 ssize_t getline(char **lineptr, size_t *n, FILE *stream);
+char *fgetln(FILE *stream, size_t *len);
 
 int printf(const char *format, ...) __attribute__((format(printf, 1, 2)));
 int vprintf(const char *format, va_list ap);

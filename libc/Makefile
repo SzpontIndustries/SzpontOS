@@ -13,6 +13,7 @@ LIBC_C_SRCS := \
     $(ROOT_DIR)/libc/src/stdlib/system.c \
     $(ROOT_DIR)/libc/src/stdlib/crypt.c \
     $(ROOT_DIR)/libc/src/stdio/printf.c \
+    $(ROOT_DIR)/libc/src/stdio/fgetln.c \
     $(ROOT_DIR)/libc/src/stdio/err.c \
     $(ROOT_DIR)/libc/src/signal/siglist.c \
     $(ROOT_DIR)/libc/src/signal/signalfd.c \
@@ -140,7 +141,9 @@ $(BUILD_DIR)/libc/dso_handle.o:
 	@printf '__attribute__((visibility("hidden"))) void *__dso_handle = &__dso_handle;\n' | $(CC) -c -fPIC -O2 -ffreestanding -x c - -o $@
 
 # Sysroot Target (cross-compilation root for third-party libraries)
-$(SYSROOT_STAMP): $(LIBC_A) $(CRT0_O) $(CRTI_O) $(CRTN_O) $(BUILD_DIR)/libc/dso_handle.o $(LIBM_A) $(LIBDL_A) $(LIBC_SO) $(LIBM_SO) $(LIBC_HEADERS) $(UAPI_HEADERS)
+# NOTE: SYSROOT_TP_SRCS (third-party header sources) are normal prereqs so a
+# sysroot stamped over not-yet-populated submodules refreshes exactly once.
+$(SYSROOT_STAMP): $(LIBC_A) $(CRT0_O) $(CRTI_O) $(CRTN_O) $(BUILD_DIR)/libc/dso_handle.o $(LIBM_A) $(LIBDL_A) $(LIBC_SO) $(LIBM_SO) $(LIBC_HEADERS) $(UAPI_HEADERS) $(SYSROOT_TP_SRCS)
 	@mkdir -p $(SYSROOT_DIR)/usr/include $(SYSROOT_DIR)/usr/lib $(SYSROOT_DIR)/usr/lib/pkgconfig $(SYSROOT_DIR)/usr/share/pkgconfig $(SYSROOT_DIR)/usr/share/xcb $(SYSROOT_DIR)/usr/include/libdrm $(SYSROOT_DIR)/usr/include/drm $(SYSROOT_DIR)/usr/include/libxcvt $(SYSROOT_DIR)/usr/include/pixman-1 $(SYSROOT_DIR)/usr/include/X11/Xtrans $(SYSROOT_DIR)/usr/include/X11/extensions
 	@cp -R $(ROOT_DIR)/libc/include/. $(SYSROOT_DIR)/usr/include/
 	@if [ -d $(ROOT_DIR)/kernel/include/uapi ]; then cp -R $(ROOT_DIR)/kernel/include/uapi/. $(SYSROOT_DIR)/usr/include/; fi
