@@ -17,8 +17,15 @@ submodules-check:
 # ncurses configure generator (single-shot fix): previously no rule existed to
 # create `third_party/ncurses/configure`, so clean builds failed with
 # "No rule to make target" and only succeeded after manual autoreconf.
+# The guard below also self-heals an emptied worktree (missing configure.ac),
+# which plain `git submodule update` does NOT repair (it only checks SHAs).
 third_party/ncurses/configure:
 	@echo "  [PRECONF-NCURSES] Generowanie configure dla GNU Ncurses..."
+	@if [ ! -f third_party/ncurses/configure.ac ]; then \
+		echo "  [SUBMODULE] Odtwarzanie worktree third_party/ncurses..."; \
+		git -C third_party/ncurses reset --hard HEAD 2>/dev/null || git submodule update --init -- third_party/ncurses; \
+		test -f third_party/ncurses/configure.ac || { echo "  [ERR] Brak third_party/ncurses/configure.ac - uruchom: git submodule update --init --recursive"; exit 1; }; \
+	fi
 	@cd third_party/ncurses && autoreconf -fi
 
 # ==============================================================================
