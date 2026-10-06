@@ -1,12 +1,17 @@
 CompileFlags:
+  # NOTE: per-file flags come from compile_commands.json (regenerate with
+  # `make compile-commands`). Do NOT add -I here: relative entries sort ahead
+  # of the DB's absolute ones in clang's search order, so -Ikernel/include
+  # used to shadow libc's stdint/stddef/stdbool with the kernel's
+  # wchar_t-less variants in every userland/libc TU. Keep only the target
+  # triple + defines as a fallback for files not (yet) in the DB.
   Add:
     - "-target"
     - "x86_64-unknown-none-elf"
     - "-ffreestanding"
-    - "-Ilibc/include"
-    - "-Ikernel/include"
-    - "-I."
     - "-D__x86_64__=1"
+    - "-D__szpontos__=1"
+    - "-D__unix__=1"
   Remove:
     - "-mcmodel=kernel"
     - "-mno-80387"

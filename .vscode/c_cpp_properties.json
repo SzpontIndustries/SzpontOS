@@ -5,10 +5,14 @@
       "includePath": [
         "${workspaceFolder}/libc/include",
         "${workspaceFolder}/kernel/include",
+        "${workspaceFolder}/kernel/include/uapi",
+        "${workspaceFolder}/build/sysroot/usr/include",
         "${workspaceFolder}"
       ],
       "defines": [
-        "__x86_64__=1"
+        "__x86_64__=1",
+        "__szpontos__=1",
+        "__unix__=1"
       ],
       "compilerPath": "/opt/homebrew/bin/x86_64-elf-gcc",
       "cStandard": "c17",

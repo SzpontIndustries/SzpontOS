@@ -484,7 +484,7 @@ All build workflows are managed through the central [Makefile](Makefile) and mod
 - **Archiver:** `x86_64-elf-ar`
 - **ISO Generator:** `xorriso`
 - **Emulator:** `qemu-system-x86_64`
-- **Compilation DB Tool:** `bear`
+- **Compilation DB Tool:** `scripts/generate_compile_commands.py` (static, no rebuild; `make compile-commands`)
 - **Sysroot Cross-Compilers:** `scripts/szpontos-gcc` and `scripts/szpontos-g++` (target sysroot wrapper scripts for ports and userland)
 - **C++ Runtime Builder:** `scripts/build_libstdcxx.py` (automates out-of-tree cross-compilation of GNU libstdc++-v3)
 

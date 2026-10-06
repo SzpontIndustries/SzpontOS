@@ -90,21 +90,18 @@ userland: $(USERLAND_STAMP)
 third-party: $(THIRDPARTY_STAMP)
 
 # ==============================================================================
-# Development Tooling & Compilation Database (clangd / bear)
+# Development Tooling & Compilation Database (clangd / IDE IntelliSense)
+# NOTE (single-shot fix): the DB is generated STATICALLY by
+# scripts/generate_compile_commands.py (flag sets mirror config.mk + component
+# makefiles, incl. C++). The old `bear -- $(MAKE) clean all` approach is gone:
+# it forced a full rebuild, captured host-tool noise (makestrs, autotools
+# probes, meson try-compiles) and ccache-wrapped compiler paths, and deleted
+# the DB first - so any failed run left the linter with nothing.
 # ==============================================================================
 compile_commands.json compile-commands bear:
-	@echo "  [BEAR] Generowanie compile_commands.json za pomocą bear..."
-	@if command -v bear >/dev/null 2>&1; then \
-		rm -f compile_commands.json; \
-		bear -- $(MAKE) clean all; \
-		if [ -f compile_commands.json ]; then \
-			python3 -c "import json; db = json.load(open('compile_commands.json')); json.dump([e for e in db if not e.get('file','').endswith('.asm') and (not e.get('arguments') or e['arguments'][0] != 'nasm')], open('compile_commands.json', 'w'), indent=2)"; \
-		fi; \
-		echo "  [OK]   Wygenerowano compile_commands.json dla clangd / IDE."; \
-	else \
-		echo "  [!]    Błąd: Brak narzędzia bear. Zainstaluj 'brew install bear'."; \
-		exit 1; \
-	fi
+	@echo "  [CLANGD-DB] Generowanie compile_commands.json (statycznie, bez przebudowy)..."
+	@python3 $(ROOT_DIR)/scripts/generate_compile_commands.py
+	@python3 -c "import json,sys; db=json.load(open('compile_commands.json')); assert isinstance(db,list) and db, 'pusta baza'; print('  [OK]   compile_commands.json: %d wpisow, JSON poprawny.' % len(db))"
 
 # ==============================================================================
 # Cleanup Rules
