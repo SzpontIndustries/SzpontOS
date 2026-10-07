@@ -64,6 +64,7 @@ typedef struct process {
     bool fd_cloexec[MAX_FD];
     char cwd[256];
     mode_t umask;
+    bool no_new_privs; /* PR_SET_NO_NEW_PRIVS: sticky, inherited by fork() and kept across execve() */
     uint64_t alarm_ticks;
 
     uintptr_t brk_start;
