@@ -27,6 +27,7 @@
 #define SYS_pipe 22
 #define SYS_select 23
 #define SYS_yield 24
+#define SYS_madvise 28
 #define SYS_shmget 29
 #define SYS_shmat 30
 #define SYS_shmctl 31
@@ -117,6 +118,7 @@
 #define SYS_getpriority 140
 #define SYS_setpriority 141
 #define SYS_sysctl 156
+#define SYS_prctl 157
 #define SYS_arch_prctl 158
 #define SYS_setrlimit 160
 #define SYS_sync 162
@@ -130,6 +132,7 @@
 #define SYS_tkill 200
 #define SYS_time 201
 #define SYS_futex 202
+#define SYS_sched_getaffinity 204
 #define SYS_set_tid_address 218
 #define SYS_clock_settime 227
 #define SYS_clock_gettime 228

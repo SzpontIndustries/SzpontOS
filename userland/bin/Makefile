@@ -91,6 +91,7 @@ TEST_PROGS := \
     $(ROOTFS_DIR)/usr/tbin/inotifytest \
     $(ROOTFS_DIR)/usr/tbin/timerfdtest \
     $(ROOTFS_DIR)/usr/tbin/signalfdtest \
+    $(ROOTFS_DIR)/usr/tbin/compattest \
     $(ROOTFS_DIR)/usr/tbin/sysfstest
 
 .PHONY: all progs symlinks

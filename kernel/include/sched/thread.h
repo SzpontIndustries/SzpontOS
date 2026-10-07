@@ -34,6 +34,7 @@ typedef struct thread {
     uintptr_t futex_uaddr;
     struct process *futex_proc;
     int exit_code;
+    char name[16];                 /* PR_SET_NAME; empty means inherit the process name */
 
     uint8_t fpu_state[512] __attribute__((aligned(16)));
 

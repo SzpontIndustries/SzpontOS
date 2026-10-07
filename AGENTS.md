@@ -302,6 +302,7 @@ The kernel implements over 100 POSIX system calls in [kernel/src/syscall/syscall
 | 22 | `SYS_pipe` | Create unidirectional IPC data channel |
 | 23 | `SYS_select` | Synchronous I/O multiplexing |
 | 24 | `SYS_yield` | Yield remaining CPU timeslice |
+| 28 | `SYS_madvise` | Memory usage hints (`MADV_WILLNEED`, `MADV_FREE`, ...); `MADV_DONTNEED` returns `-EINVAL` |
 | 29 | `SYS_shmget` | Allocate SysV shared memory segment |
 | 30 | `SYS_shmat` | Attach SysV shared memory segment |
 | 31 | `SYS_shmctl` | Control SysV shared memory segment |
@@ -389,6 +390,7 @@ The kernel implements over 100 POSIX system calls in [kernel/src/syscall/syscall
 | 140 | `SYS_getpriority` | Get program scheduling priority |
 | 141 | `SYS_setpriority` | Set program scheduling priority |
 | 156 | `SYS_sysctl` | Read or write system control parameters |
+| 157 | `SYS_prctl` | Thread name (`PR_SET_NAME` / `PR_GET_NAME`) and `PR_SET_NO_NEW_PRIVS` / `PR_GET_NO_NEW_PRIVS` |
 | 158 | `SYS_arch_prctl` | Set architecture-specific thread state (`FS_BASE` / `GS_BASE`) |
 | 160 | `SYS_setrlimit` | Set process resource limits |
 | 162 | `SYS_sync` | Synchronize cached filesystem buffers to disk |
@@ -402,6 +404,7 @@ The kernel implements over 100 POSIX system calls in [kernel/src/syscall/syscall
 | 200 | `SYS_tkill` | Send signal to specific thread |
 | 201 | `SYS_time` | Get current Unix epoch timestamp (seconds) |
 | 202 | `SYS_futex` | Fast user-space locking (`FUTEX_WAIT`, `FUTEX_WAKE`) |
+| 204 | `SYS_sched_getaffinity` | Report the CPU mask (all online CPUs; threads are not pinned) |
 | 218 | `SYS_set_tid_address`| Set pointer to thread ID for clear_child_tid |
 | 227 | `SYS_clock_settime`| Set clock time |
 | 228 | `SYS_clock_gettime`| Retrieve clock time (`CLOCK_REALTIME`, `CLOCK_MONOTONIC`) |

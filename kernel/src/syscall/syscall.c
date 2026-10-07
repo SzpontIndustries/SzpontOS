@@ -1573,6 +1573,111 @@ static int64_t sys_arch_prctl(int code, uintptr_t addr) {
     return -1;
 }
 
+#define PR_SET_NAME 15
+#define PR_GET_NAME 16
+#define PR_SET_NO_NEW_PRIVS 38
+#define PR_GET_NO_NEW_PRIVS 39
+#define TASK_COMM_LEN 16
+
+static int64_t sys_prctl(int option, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5) {
+    process_t *proc = sched_get_current_process();
+    thread_t *curr = sched_get_current_thread();
+    if (!proc || !curr)
+        return -3; /* -ESRCH */
+
+    switch (option) {
+    case PR_SET_NAME: {
+        char name[TASK_COMM_LEN];
+        memset(name, 0, sizeof(name));
+        if (copy_string_from_user(name, (uintptr_t)arg2, sizeof(name)) < 0)
+            return -14; /* -EFAULT */
+        memcpy(curr->name, name, sizeof(curr->name));
+        /* The first thread is the one ps/top identify the process by. */
+        if (proc->threads.next == &curr->proc_node) {
+            memset(proc->name, 0, sizeof(proc->name));
+            memcpy(proc->name, name, sizeof(name));
+        }
+        return 0;
+    }
+    case PR_GET_NAME: {
+        char name[TASK_COMM_LEN];
+        memset(name, 0, sizeof(name));
+        strncpy(name, curr->name[0] ? curr->name : proc->name, sizeof(name) - 1);
+        if (!copy_to_user((uintptr_t)arg2, name, sizeof(name)))
+            return -14; /* -EFAULT */
+        return 0;
+    }
+    case PR_SET_NO_NEW_PRIVS:
+        if (arg2 != 1 || arg3 || arg4 || arg5)
+            return -22; /* -EINVAL */
+        proc->no_new_privs = true;
+        return 0;
+    case PR_GET_NO_NEW_PRIVS:
+        if (arg2 || arg3 || arg4 || arg5)
+            return -22; /* -EINVAL */
+        return proc->no_new_privs ? 1 : 0;
+    default:
+        return -22; /* -EINVAL */
+    }
+}
+
+static int64_t sys_sched_getaffinity(pid_t pid, size_t len, uintptr_t user_mask) {
+    process_t *proc = sched_get_current_process();
+    thread_t *curr = sched_get_current_thread();
+    if (!proc || !curr)
+        return -3; /* -ESRCH */
+
+    /* SMP_MAX_CPUS == 64, so the kernel cpumask is exactly one word. */
+    if (len < sizeof(uint64_t) || (len & (sizeof(uint64_t) - 1)))
+        return -22; /* -EINVAL */
+    if (pid != 0 && pid != proc->pid && pid != curr->tid && !process_get_by_pid(pid))
+        return -3; /* -ESRCH */
+
+    /* Threads are not pinned yet, so every online CPU is eligible. */
+    uint32_t count = smp_get_cpu_count();
+    uint64_t mask = count >= 64 ? ~0ULL : (1ULL << count) - 1;
+    if (!copy_to_user(user_mask, &mask, sizeof(mask)))
+        return -14; /* -EFAULT */
+    return (int64_t)sizeof(mask);
+}
+
+#define MADV_NORMAL 0
+#define MADV_RANDOM 1
+#define MADV_SEQUENTIAL 2
+#define MADV_WILLNEED 3
+#define MADV_FREE 8
+#define MADV_MERGEABLE 12
+#define MADV_UNMERGEABLE 13
+#define MADV_HUGEPAGE 14
+#define MADV_NOHUGEPAGE 15
+#define MADV_DONTDUMP 16
+#define MADV_DODUMP 17
+
+static int64_t sys_madvise(void *addr, size_t len, int advice) {
+    if (((uintptr_t)addr & (PAGE_SIZE - 1)) || !vmm_user_range((uintptr_t)addr, len))
+        return -22; /* -EINVAL */
+
+    switch (advice) {
+    case MADV_NORMAL:
+    case MADV_RANDOM:
+    case MADV_SEQUENTIAL:
+    case MADV_WILLNEED:
+    case MADV_MERGEABLE:
+    case MADV_UNMERGEABLE:
+    case MADV_HUGEPAGE:
+    case MADV_NOHUGEPAGE:
+    case MADV_DONTDUMP:
+    case MADV_DODUMP:
+    case MADV_FREE:
+        /* Pure hints: nothing to tune, and MADV_FREE may legally keep the old contents. */
+        return 0;
+    default:
+        /* MADV_DONTNEED must zero private pages and MADV_DONTFORK must change
+         * fork(); both need per-mapping metadata the VMM does not track yet. */
+        return -22; /* -EINVAL */
+    }
+}
+
 static int64_t sys_futex(uintptr_t uaddr, int futex_op, int val, uintptr_t timeout_or_val2, uintptr_t uaddr2,
                          int val3) {
     UNUSED(val3);
@@ -1705,6 +1810,7 @@ static int64_t sys_fork(void) {
     child->sgid = parent->sgid;
     child->priority = parent->priority;
     child->umask = parent->umask;
+    child->no_new_privs = parent->no_new_privs;
     child->ngroups = parent->ngroups;
     memcpy(child->groups, parent->groups, sizeof(child->groups));
     child->blocked_signals = parent->blocked_signals;
@@ -1975,6 +2081,9 @@ static int64_t sys_execve(const char *pathname, char *const argv[], char *const 
     proc->brk_current = proc->brk_start;
     proc->mmap_current = 0x0000600000000000ULL;
     strncpy(proc->name, resolved_path, sizeof(proc->name) - 1);
+    thread_t *exec_thread = sched_get_current_thread();
+    if (exec_thread)
+        exec_thread->name[0] = '\0';
     vmm_switch_address_space(new_map);
     vmm_destroy_address_space(old_map);
 
@@ -3573,6 +3682,12 @@ static uint64_t syscall_dispatch_inner(uint64_t sys_no, uint64_t a1, uint64_t a2
         return sys_set_tid_address((uintptr_t)a1);
     case SYS_arch_prctl:
         return sys_arch_prctl((int)a1, (uintptr_t)a2);
+    case SYS_prctl:
+        return sys_prctl((int)a1, a2, a3, a4, a5);
+    case SYS_sched_getaffinity:
+        return sys_sched_getaffinity((pid_t)a1, (size_t)a2, (uintptr_t)a3);
+    case SYS_madvise:
+        return sys_madvise((void *)a1, (size_t)a2, (int)a3);
     case SYS_init_module: {
         process_t *proc = sched_get_current_process();
         if (!proc || proc->euid != 0)
@@ -3662,7 +3777,7 @@ static uint64_t syscall_dispatch_inner(uint64_t sys_no, uint64_t a1, uint64_t a2
         return sys_timerfd_gettime((int)a1, (struct itimerspec_kernel *)a2);
     default:
         klog_warn("Syscall: Unknown syscall #%lu called!", sys_no);
-        return (uint64_t)-1;
+        return (uint64_t)-38; /* -ENOSYS, so libc fallbacks can detect it */
     }
 }
 
