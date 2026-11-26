@@ -124,7 +124,14 @@ static ssize_t timerfd_vfs_read(vfs_node_t *node, off_t offset, size_t size, voi
                     break;
                 }
             }
-            if (proc->pending_signals & ~proc->blocked_signals) {
+            thread_t *tfd_self = sched_get_current_thread();
+            uint32_t tfd_pend = proc->pending_signals;
+            uint32_t tfd_mask = 0;
+            if (tfd_self) {
+                tfd_pend |= tfd_self->thread_pending;
+                tfd_mask = tfd_self->blocked_signals;
+            }
+            if (tfd_pend & ~tfd_mask) {
                 spinlock_release(&ctx->lock);
                 return -4; /* -EINTR */
             }
@@ -229,7 +236,9 @@ int64_t sys_timerfd_create(int clockid, int flags) {
     }
 
     fdesc->node = node;
-    fdesc->flags = O_RDONLY;
+    /* Linux creates timerfd descriptors O_RDWR; O_RDONLY breaks writev(2)
+     * on accepted sockets in ported event loops that share poll helpers. */
+    fdesc->flags = O_RDWR;
     if (flags & TFD_NONBLOCK)
         fdesc->flags |= 0x0800; /* O_NONBLOCK */
     fdesc->refcount = 1;

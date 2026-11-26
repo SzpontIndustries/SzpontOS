@@ -81,7 +81,7 @@ def optimize_rootfs(source_dir):
         for root, dirs, files in os.walk(source_dir):
             for f in files:
                 full = os.path.join(root, f)
-                if os.path.islink(full) or not os.path.isfile(full):
+                if os.path.islink(full) or not os.path.isfile(full) or f.endswith((".sko", ".o")):
                     continue
                 try:
                     with open(full, "rb") as fp:

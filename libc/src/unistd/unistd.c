@@ -241,7 +241,7 @@ pid_t fork(void) {
 }
 
 pid_t vfork(void) {
-    return fork();
+    return (pid_t)__syscall0(SYS_vfork);
 }
 
 int execve(const char *pathname, char *const argv[], char *const envp[]) {
@@ -484,6 +484,26 @@ int kill(pid_t pid, int sig) {
     int64_t ret = __syscall2(SYS_kill, pid, sig);
     if (ret < 0) {
         errno = ESRCH;
+        return -1;
+    }
+    return (int)ret;
+}
+
+int tkill(int tid, int sig) {
+    extern int64_t __syscall2(int64_t num, int64_t a1, int64_t a2);
+    int64_t ret = __syscall2(SYS_tkill, tid, sig);
+    if (ret < 0) {
+        errno = (int)-ret;
+        return -1;
+    }
+    return (int)ret;
+}
+
+int tgkill(pid_t tgid, int tid, int sig) {
+    extern int64_t __syscall3(int64_t num, int64_t a1, int64_t a2, int64_t a3);
+    int64_t ret = __syscall3(SYS_tgkill, tgid, tid, sig);
+    if (ret < 0) {
+        errno = (int)-ret;
         return -1;
     }
     return (int)ret;

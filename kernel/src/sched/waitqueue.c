@@ -29,8 +29,8 @@ void wait_queue_wait(wait_queue_t *wq) {
     list_add_tail(&wq->waiters, &node.node);
     spinlock_release_irqrestore(&wq->lock, flags);
 
-    /* Block current thread and yield until awakened */
-    sched_block_current_thread();
+    /* Atomically block under scheduler lock unless already woken */
+    sched_block_on_waitq(&node.woken);
 
     /* Clean up our node if still in the list */
     spinlock_acquire_irqsave(&wq->lock, &flags);
@@ -51,7 +51,7 @@ void wait_queue_wake_one(wait_queue_t *wq) {
         list_node_t *first = wq->waiters.next;
         wait_node_t *node = container_of(first, wait_node_t, node);
         list_remove(first);
-        node->woken = true;
+        __atomic_store_n(&node->woken, true, __ATOMIC_RELEASE);
         sched_unblock_thread(node->thread);
     }
     spinlock_release_irqrestore(&wq->lock, flags);
@@ -67,7 +67,7 @@ void wait_queue_wake_all(wait_queue_t *wq) {
     list_for_each_safe(pos, n, &wq->waiters) {
         wait_node_t *node = container_of(pos, wait_node_t, node);
         list_remove(pos);
-        node->woken = true;
+        __atomic_store_n(&node->woken, true, __ATOMIC_RELEASE);
         sched_unblock_thread(node->thread);
     }
     spinlock_release_irqrestore(&wq->lock, flags);

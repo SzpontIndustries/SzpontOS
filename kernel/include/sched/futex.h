@@ -27,10 +27,12 @@ struct timespec {
     int64_t tv_nsec;
 };
 struct thread;
+struct process;
 
 void futex_init(void);
 int futex_wait(uintptr_t uaddr, int val, const struct timespec *timeout);
 int futex_wake(uintptr_t uaddr, int count);
+int futex_wake_proc(struct process *proc, uintptr_t uaddr, int count);
 int futex_requeue(uintptr_t uaddr1, int wake_count, uintptr_t uaddr2, int requeue_count);
 void futex_remove_thread(struct thread *t);
 

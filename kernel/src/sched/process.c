@@ -139,7 +139,7 @@ process_t *process_create(const char *name) {
     wait_queue_init(&proc->wait_child);
 
     proc->pending_signals = 0;
-    proc->blocked_signals = 0;
+    /* Per-thread masks start empty; threads inherit from their creator. */
     for (int i = 0; i < 32; i++) {
         proc->signal_handlers[i] = SIG_DFL;
         memset(&proc->sigactions[i], 0, sizeof(struct sigaction));
@@ -209,18 +209,47 @@ void process_destroy_unstarted(process_t *proc) {
     kfree(proc);
 }
 
+tid_t process_alloc_tid(void) {
+    return __atomic_fetch_add(&g_next_tid, 1, __ATOMIC_RELAXED);
+}
+
+bool process_attach_thread(process_t *proc, thread_t *t) {
+    if (!proc || !t)
+        return false;
+    spinlock_acquire(&g_process_lock);
+    if (proc->status != PROCESS_ACTIVE) {
+        spinlock_release(&g_process_lock);
+        return false;
+    }
+    list_add_tail(&proc->threads, &t->proc_node);
+    spinlock_release(&g_process_lock);
+    return true;
+}
+
+bool process_is_main_thread(process_t *proc, thread_t *t) {
+    if (!proc || !t)
+        return false;
+    spinlock_acquire(&g_process_lock);
+    bool main_t = (proc->threads.next == &t->proc_node);
+    spinlock_release(&g_process_lock);
+    return main_t;
+}
+
 thread_t *thread_create(process_t *proc, void (*entry_point)(void), bool is_user) {
     UNUSED(is_user);
     if (!proc)
         return NULL;
 
-    spinlock_acquire(&g_process_lock);
-
     thread_t *t = (thread_t *)kzalloc(sizeof(thread_t));
-    t->tid = g_next_tid++;
+    if (!t)
+        return NULL;
+    t->tid = process_alloc_tid();
     t->process = proc;
     t->state = THREAD_READY;
     t->running_cpu = -1;
+    list_init(&t->sched_node);
+    list_init(&t->proc_node);
+    list_init(&t->futex_node);
     memcpy(t->fpu_state, g_default_fpu_state, 512);
 
     /* Allocate 16 KiB kernel stack */
@@ -229,7 +258,6 @@ thread_t *thread_create(process_t *proc, void (*entry_point)(void), bool is_user
     if (!stack_phys) {
         klog_error("thread_create: Out of physical memory allocating kernel stack!");
         kfree(t);
-        spinlock_release(&g_process_lock);
         return NULL;
     }
     t->kernel_stack_bottom = (uintptr_t)PHYS_TO_VIRT(stack_phys);
@@ -253,6 +281,7 @@ thread_t *thread_create(process_t *proc, void (*entry_point)(void), bool is_user
 
     t->rsp = (uintptr_t)sp;
 
+    spinlock_acquire(&g_process_lock);
     list_add_tail(&proc->threads, &t->proc_node);
     spinlock_release(&g_process_lock);
 
@@ -260,41 +289,119 @@ thread_t *thread_create(process_t *proc, void (*entry_point)(void), bool is_user
     return t;
 }
 
+/* Best-effort robust futex cleanup for an exiting thread (set_robust_list).
+ * For every robust mutex owned by tid, set FUTEX_OWNER_DIED and wake one
+ * waiter so pthread_mutex_lock in another thread returns EOWNERDEAD instead
+ * of hanging. Corrupted lists terminate the walk silently; exit must never
+ * fail because of user memory. */
+static void robust_cleanup_pagemap(thread_t *curr, pagemap_t *map) {
+    if (!curr || curr->robust_head == 0 || !map)
+        return;
+    struct {
+        uint64_t list;
+        int64_t futex_offset;
+        uint64_t list_op_pending;
+    } head;
+    if (!copy_from_user_pagemap(map, &head, curr->robust_head, sizeof(head)))
+        return;
+    /* The head itself lives in user memory that may vanish under us; snapshot. */
+    uint64_t pending = head.list_op_pending;
+    uint64_t node_addr = head.list;
+    int64_t futex_offset = head.futex_offset;
+    /* futex_offset is normally small (e.g. 0/4/8); reject absurd values that
+     * would turn the walk into arbitrary memory writes. */
+    if (futex_offset < 0 || futex_offset > 2048)
+        return;
+
+    for (int iter = 0; iter < 1025; iter++) {
+        uint64_t cur = 0;
+        if (iter == 0 && pending != 0) {
+            cur = pending;
+        } else {
+            /* Advance first, process second: a single-node list whose next
+             * points back at the head must still be processed. */
+            if (node_addr == 0 || node_addr == curr->robust_head)
+                break;
+            cur = node_addr;
+            uint64_t next = 0;
+            node_addr = copy_from_user_pagemap(map, &next, cur, sizeof(next)) ? next : 0;
+        }
+        if (cur == 0 || cur > USER_ADDR_MAX)
+            continue;
+        uintptr_t futex_addr = cur + (uintptr_t)futex_offset;
+        if (futex_addr > USER_ADDR_MAX)
+            continue;
+        int32_t val = 0;
+        if (!copy_from_user_pagemap(map, &val, futex_addr, sizeof(val)))
+            continue;
+        uint32_t owner = (uint32_t)val & 0x3FFFFFFFU;
+        if (owner != (uint32_t)curr->tid)
+            continue;
+        if (val & 0x40000000)
+            continue; /* Already marked OWNER_DIED */
+        int32_t marked = val | 0x40000000;
+        if (!copy_to_user_pagemap(map, futex_addr, &marked, sizeof(marked)))
+            continue;
+        if (curr->process)
+            futex_wake_proc(curr->process, futex_addr, 1);
+    }
+}
+
+/* Release the user-visible thread exit state (robust futexes + TID word)
+ * using an explicit address space. Siblings retired from process_exit share
+ * the dying process's pagemap, which may differ from the current one when a
+ * kill is delivered from another process. Failures are silent: teardown must
+ * never fail because of user memory. */
+static void teardown_thread_user(thread_t *t, pagemap_t *map) {
+    if (!t || !map)
+        return;
+    process_t *owner = t->process;
+    robust_cleanup_pagemap(t, map);
+    if (t->clear_child_tid) {
+        int32_t zero = 0;
+        if (copy_to_user_pagemap(map, t->clear_child_tid, &zero, sizeof(zero)) && owner)
+            futex_wake_proc(owner, t->clear_child_tid, 1);
+        t->clear_child_tid = 0;
+    }
+    t->rseq_ptr = 0;
+    t->rseq_len = 0;
+}
+
 void thread_exit(int exit_code) {
-    UNUSED(exit_code);
     thread_t *curr = sched_get_current_thread();
     if (!curr)
         return;
 
-    /* Handle CLONE_CHILD_CLEARTID / set_tid_address */
-    if (curr->clear_child_tid && curr->process && curr->process->pagemap) {
-        if (vmm_virt_to_phys(curr->process->pagemap, curr->clear_child_tid)) {
-            *(volatile int *)curr->clear_child_tid = 0;
-            futex_wake(curr->clear_child_tid, 1);
-        }
-        curr->clear_child_tid = 0;
-    }
+    pagemap_t *map = curr->process ? curr->process->pagemap : NULL;
+    teardown_thread_user(curr, map);
+    futex_remove_thread(curr);
 
-    curr->state = THREAD_ZOMBIE;
-
-    /* If all threads are zombie, exit process */
+    /* Retire this thread and check whether any live sibling remains under
+     * g_process_lock so concurrent sys_clone / thread_exit / procfs scans
+     * observe consistent state. */
     process_t *proc = curr->process;
     bool all_dead = true;
-
-    list_node_t *pos;
-    list_for_each(pos, &proc->threads) {
-        thread_t *t = container_of(pos, thread_t, proc_node);
-        if (t->state != THREAD_ZOMBIE) {
-            all_dead = false;
-            break;
+    spinlock_acquire(&g_process_lock);
+    curr->state = THREAD_ZOMBIE;
+    if (proc) {
+        list_node_t *pos;
+        list_for_each(pos, &proc->threads) {
+            thread_t *t = container_of(pos, thread_t, proc_node);
+            if (t->state != THREAD_ZOMBIE) {
+                all_dead = false;
+                break;
+            }
         }
     }
+    spinlock_release(&g_process_lock);
 
-    if (all_dead) {
+    if (all_dead && proc) {
         process_exit(exit_code);
     }
 
-    sched_yield();
+    for (;;) {
+        sched_yield();
+    }
 }
 
 void process_close_all_fds(process_t *proc) {
@@ -317,14 +424,10 @@ void process_exit(int exit_code) {
     if (!proc)
         return;
 
-    /* Detach all active shared memory mappings */
-    shm_process_exit(proc);
-
-    /* Close all open file descriptors so pipe/socket peers receive EOF/HUP immediately */
-    process_close_all_fds(proc);
-
+    /* Claim teardown first so concurrent kills/forks observe the zombie. */
     proc->status = PROCESS_ZOMBIE;
     proc->exit_code = exit_code;
+    proc->vfork_done = true; /* Release a vfork parent blocked in sys_vfork. */
 
     if (g_foreground_proc == proc) {
         g_foreground_proc = NULL;
@@ -332,11 +435,32 @@ void process_exit(int exit_code) {
 
     /* Reparent all children of exiting process to PID 1 (init) */
     bool notify_init = false;
+    struct {
+        pid_t pid;
+        int sig;
+    } pdeath[128];
+    int pdeath_count = 0;
     spinlock_acquire(&g_process_lock);
     list_node_t *cpos;
     list_for_each(cpos, &g_process_list) {
         process_t *child = container_of(cpos, process_t, proc_list_node);
         if (child->ppid == proc->pid) {
+            /* Capture PR_SET_PDEATHSIG before reparenting: a child thread
+             * that asked to be signaled on parent death must be notified. */
+            int sig = 0;
+            list_node_t *tpos;
+            list_for_each(tpos, &child->threads) {
+                thread_t *t = container_of(tpos, thread_t, proc_node);
+                if (t->state != THREAD_ZOMBIE && t->pdeathsig > 0 && t->pdeathsig < 32) {
+                    sig = t->pdeathsig;
+                    break;
+                }
+            }
+            if (sig != 0 && pdeath_count < 128) {
+                pdeath[pdeath_count].pid = child->pid;
+                pdeath[pdeath_count].sig = sig;
+                pdeath_count++;
+            }
             child->ppid = 1;
             if (child->status == PROCESS_ZOMBIE) {
                 notify_init = true;
@@ -344,6 +468,11 @@ void process_exit(int exit_code) {
         }
     }
     spinlock_release(&g_process_lock);
+    for (int i = 0; i < pdeath_count; i++) {
+        process_t *child = process_get_by_pid(pdeath[i].pid);
+        if (child && child->status == PROCESS_ACTIVE)
+            process_send_signal(child, pdeath[i].sig);
+    }
 
     if (proc->ppid > 0) {
         process_t *parent = process_get_by_pid(proc->ppid);
@@ -372,12 +501,23 @@ void process_exit(int exit_code) {
     list_for_each(pos, &proc->threads) {
         if (!pos) break;
         thread_t *t = container_of(pos, thread_t, proc_node);
+        /* Retire siblings before releasing user-visible resources: clear
+         * robust futexes and TID words while the address space is alive,
+         * then drop futex waits and deschedule. */
         futex_remove_thread(t);
+        teardown_thread_user(t, proc->pagemap);
         t->state = THREAD_ZOMBIE;
         sched_remove_thread(t);
     }
 
-    sched_yield();
+    /* Release shared memory and file descriptors after threads are retired
+     * so pipe/socket peers observe EOF/HUP exactly once. */
+    shm_process_exit(proc);
+    process_close_all_fds(proc);
+
+    for (;;) {
+        sched_yield();
+    }
 }
 
 int process_send_signal(process_t *proc, int sig) {
@@ -403,10 +543,22 @@ int process_send_signal(process_t *proc, int sig) {
         return 0;
     }
 
-    if ((proc->blocked_signals & (1U << sig)) && sig != SIGKILL && sig != SIGSTOP) {
-        /* Signal is blocked by process; keep in pending_signals for sigwait/signalfd */
-        spinlock_release(&g_process_lock);
-        return 0;
+    if ((sig != SIGKILL && sig != SIGSTOP)) {
+        /* Masks are per-thread: deliver unless every live thread blocks it.
+         * A fully-blocked signal stays pending for sigwait/signalfd. */
+        bool all_blocked = true;
+        list_node_t *tpos;
+        list_for_each(tpos, &proc->threads) {
+            thread_t *t = container_of(tpos, thread_t, proc_node);
+            if (t->state != THREAD_ZOMBIE && !(t->blocked_signals & (1U << sig))) {
+                all_blocked = false;
+                break;
+            }
+        }
+        if (all_blocked) {
+            spinlock_release(&g_process_lock);
+            return 0;
+        }
     }
 
     if (handler == SIG_DFL || (handler > 3 && (sig == SIGHUP || sig == SIGINT || sig == SIGQUIT || sig == SIGKILL || sig == SIGTERM || sig == SIGSEGV || sig == SIGILL))) {
@@ -422,6 +574,7 @@ int process_send_signal(process_t *proc, int sig) {
 
             proc->status = PROCESS_ZOMBIE;
             proc->exit_code = (128 + sig);
+            proc->vfork_done = true;
 
             if (g_foreground_proc == proc) {
                 g_foreground_proc = NULL;
@@ -447,6 +600,7 @@ int process_send_signal(process_t *proc, int sig) {
                 if (!pos) break;
                 thread_t *t = container_of(pos, thread_t, proc_node);
                 futex_remove_thread(t);
+                teardown_thread_user(t, proc->pagemap);
                 t->state = THREAD_ZOMBIE;
                 sched_remove_thread(t);
             }
@@ -794,7 +948,8 @@ int process_sigaction(int sig, const struct sigaction *act, struct sigaction *ol
 
 int process_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
     process_t *curr = sched_get_current_process();
-    if (!curr)
+    thread_t *self = sched_get_current_thread();
+    if (!curr || !self)
         return -1;
 
     sigset_t kset = 0;
@@ -809,17 +964,22 @@ int process_sigprocmask(int how, const sigset_t *set, sigset_t *oldset) {
         has_set = true;
     }
 
+    /* POSIX masks are per-thread; fork/exec inherit the calling thread's. */
     sigset_t koldset = 0;
     spinlock_acquire(&g_process_lock);
-    koldset = curr->blocked_signals;
+    koldset = self->blocked_signals;
+    if (how != SIG_BLOCK && how != SIG_UNBLOCK && how != SIG_SETMASK) {
+        spinlock_release(&g_process_lock);
+        return -22; /* -EINVAL: bad 'how' */
+    }
     if (has_set) {
         sigset_t mask = kset & ~((1ULL << SIGKILL) | (1ULL << SIGSTOP));
         if (how == SIG_BLOCK) {
-            curr->blocked_signals |= (uint32_t)mask;
+            self->blocked_signals |= (uint32_t)mask;
         } else if (how == SIG_UNBLOCK) {
-            curr->blocked_signals &= ~(uint32_t)mask;
+            self->blocked_signals &= ~(uint32_t)mask;
         } else if (how == SIG_SETMASK) {
-            curr->blocked_signals = (uint32_t)mask;
+            self->blocked_signals = (uint32_t)mask;
         }
     }
     spinlock_release(&g_process_lock);
@@ -839,13 +999,17 @@ int process_sigpending(sigset_t *set) {
     if (!set)
         return -1;
     process_t *curr = sched_get_current_process();
+    thread_t *t = sched_get_current_thread();
     if (!curr)
         return -1;
 
+    /* sigpending reports but never consumes: the union of process-directed
+     * and calling-thread-private pending signals. */
     sigset_t kpending = 0;
     spinlock_acquire(&g_process_lock);
     kpending = curr->pending_signals;
-    curr->pending_signals = 0;
+    if (t)
+        kpending |= t->thread_pending;
     spinlock_release(&g_process_lock);
 
     if ((uintptr_t)set <= USER_ADDR_MAX) {
@@ -854,6 +1018,115 @@ int process_sigpending(sigset_t *set) {
     } else {
         *set = kpending;
     }
+    return 0;
+}
+
+int process_tkill(tid_t tid, int sig) {
+    if (sig < 0 || sig >= 32)
+        return -1;
+    process_t *curr = sched_get_current_process();
+    thread_t *self = sched_get_current_thread();
+    if (!curr || !self)
+        return -1;
+    if (sig == 0) {
+        /* Null signal: existence check for the thread. */
+        bool found = false;
+        list_node_t *pos;
+        spinlock_acquire(&g_process_lock);
+        list_for_each(pos, &curr->threads) {
+            thread_t *t = container_of(pos, thread_t, proc_node);
+            if (t->tid == tid) {
+                found = true;
+                break;
+            }
+        }
+        spinlock_release(&g_process_lock);
+        return found ? 0 : -3; /* -ESRCH */
+    }
+
+    thread_t *target = NULL;
+    spinlock_acquire(&g_process_lock);
+    list_node_t *pos;
+    list_for_each(pos, &curr->threads) {
+        thread_t *t = container_of(pos, thread_t, proc_node);
+        if (t->tid == tid) {
+            target = t;
+            break;
+        }
+    }
+    if (!target || target->state == THREAD_ZOMBIE) {
+        spinlock_release(&g_process_lock);
+        return -3; /* -ESRCH */
+    }
+    target->thread_pending |= (1U << sig);
+    uintptr_t handler = curr->signal_handlers[sig];
+    bool fatal = (handler == SIG_DFL || sig == SIGKILL) &&
+                 (sig == SIGHUP || sig == SIGINT || sig == SIGQUIT || sig == SIGKILL || sig == SIGTERM ||
+                  sig == SIGSEGV || sig == SIGILL);
+    spinlock_release(&g_process_lock);
+
+    if (fatal) {
+        /* A fatal thread-directed signal terminates the whole thread group. */
+        return process_send_signal(curr, sig);
+    }
+    if (handler == SIG_IGN || ((sig == SIGCHLD || sig == SIGWINCH || sig == SIGURG) && handler == SIG_DFL)) {
+        spinlock_acquire(&g_process_lock);
+        if (target->state != THREAD_ZOMBIE)
+            target->thread_pending &= ~(1U << sig);
+        spinlock_release(&g_process_lock);
+        return 0;
+    }
+    wait_queue_wake_all(&curr->wait_child);
+    return 0;
+}
+
+int process_tgkill(pid_t tgid, tid_t tid, int sig) {
+    if (sig < 0 || sig >= 32)
+        return -1;
+    process_t *target_proc = (tgid == 0) ? sched_get_current_process() : process_get_by_pid(tgid);
+    if (!target_proc)
+        return -3; /* -ESRCH */
+    if (sig == 0) {
+        bool found = false;
+        spinlock_acquire(&g_process_lock);
+        list_node_t *pos;
+        list_for_each(pos, &target_proc->threads) {
+            thread_t *t = container_of(pos, thread_t, proc_node);
+            if (t->tid == tid) {
+                found = true;
+                break;
+            }
+        }
+        spinlock_release(&g_process_lock);
+        return found ? 0 : -3; /* -ESRCH */
+    }
+    /* Route to the thread; fatal signals terminate its whole group. */
+    thread_t *target = NULL;
+    spinlock_acquire(&g_process_lock);
+    if (target_proc->status == PROCESS_ACTIVE) {
+        list_node_t *pos;
+        list_for_each(pos, &target_proc->threads) {
+            thread_t *t = container_of(pos, thread_t, proc_node);
+            if (t->tid == tid) {
+                target = t;
+                break;
+            }
+        }
+    }
+    if (!target || target->state == THREAD_ZOMBIE) {
+        spinlock_release(&g_process_lock);
+        return -3; /* -ESRCH */
+    }
+    target->thread_pending |= (1U << sig);
+    uintptr_t handler = target_proc->signal_handlers[sig];
+    bool fatal = (handler == SIG_DFL || sig == SIGKILL) &&
+                 (sig == SIGHUP || sig == SIGINT || sig == SIGQUIT || sig == SIGKILL || sig == SIGTERM ||
+                  sig == SIGSEGV || sig == SIGILL);
+    spinlock_release(&g_process_lock);
+    if (fatal)
+        return process_send_signal(target_proc, sig);
+    /* Wake waiters so a thread blocked in waitpid re-evaluates EINTR. */
+    wait_queue_wake_all(&target_proc->wait_child);
     return 0;
 }
 
@@ -1017,8 +1290,17 @@ pid_t process_waitpid(pid_t pid, int *status, int options) {
             return -10; /* -ECHILD */
         }
 
-        /* Check for pending unblocked interrupting signals (excluding SIGCHLD) */
-        uint32_t interrupting = curr->pending_signals & ~(curr->blocked_signals | (1U << SIGCHLD));
+        /* Check for pending unblocked interrupting signals (excluding SIGCHLD).
+         * Includes the waiting thread's private signals (tkill/tgkill) and
+         * filters by its own mask. */
+        thread_t *waiter = sched_get_current_thread();
+        uint32_t all_pending = curr->pending_signals;
+        uint32_t waiter_mask = 0;
+        if (waiter) {
+            all_pending |= waiter->thread_pending;
+            waiter_mask = waiter->blocked_signals;
+        }
+        uint32_t interrupting = all_pending & ~(waiter_mask | (1U << SIGCHLD));
         if (interrupting != 0) {
             spinlock_release(&g_process_lock);
             return -4; /* -EINTR */
@@ -1046,6 +1328,40 @@ process_t *process_get_by_pid(pid_t pid) {
     }
     spinlock_release(&g_process_lock);
     return NULL;
+}
+
+thread_t *process_get_thread_by_tid(process_t *proc, tid_t tid) {
+    if (!proc)
+        return NULL;
+    spinlock_acquire(&g_process_lock);
+    list_node_t *pos;
+    list_for_each(pos, &proc->threads) {
+        thread_t *t = container_of(pos, thread_t, proc_node);
+        if (t->tid == tid) {
+            spinlock_release(&g_process_lock);
+            return t;
+        }
+    }
+    spinlock_release(&g_process_lock);
+    return NULL;
+}
+
+size_t process_get_tid_list(process_t *proc, tid_t *buf, size_t max_count) {
+    if (!proc || !buf || max_count == 0)
+        return 0;
+    spinlock_acquire(&g_process_lock);
+    size_t count = 0;
+    list_node_t *pos;
+    list_for_each(pos, &proc->threads) {
+        if (count >= max_count)
+            break;
+        thread_t *t = container_of(pos, thread_t, proc_node);
+        if (t->state != THREAD_ZOMBIE) {
+            buf[count++] = t->tid;
+        }
+    }
+    spinlock_release(&g_process_lock);
+    return count;
 }
 
 size_t process_get_list(proc_info_t *buf, size_t max_count) {

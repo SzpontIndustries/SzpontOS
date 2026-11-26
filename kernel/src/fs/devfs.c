@@ -86,7 +86,14 @@ static ssize_t devfs_serial_read(vfs_node_t *node, off_t offset, size_t size, vo
 
     while (!serial_received()) {
         process_t *curr = sched_get_current_process();
-        if (curr && (curr->pending_signals & ~curr->blocked_signals)) {
+        thread_t *self = sched_get_current_thread();
+        uint32_t pend = curr ? curr->pending_signals : 0;
+        uint32_t mask = 0;
+        if (self) {
+            pend |= self->thread_pending;
+            mask = self->blocked_signals;
+        }
+        if (pend & ~mask) {
             return -4; /* -EINTR */
         }
         thread_sleep(2);

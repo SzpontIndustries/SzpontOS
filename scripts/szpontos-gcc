@@ -1,6 +1,7 @@
 #!/bin/bash
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
+SZPONT_BUILD_DIR="${SZPONT_BUILD_DIR:-$ROOT_DIR/build}"
 
 filtered_args=()
 has_shared=0
@@ -17,7 +18,7 @@ for arg in "$@"; do
 done
 
 if [ "$has_shared" -eq 1 ]; then
-    exec x86_64-elf-gcc "${filtered_args[@]}" -nostartfiles "$ROOT_DIR/build/sysroot/usr/lib/dso_handle.o" -Wl,-shared -Wl,-z,undefs
+    exec x86_64-elf-gcc "${filtered_args[@]}" -nostartfiles "$SZPONT_BUILD_DIR/sysroot/usr/lib/dso_handle.o" -Wl,-shared -Wl,-z,undefs
 else
     exec x86_64-elf-gcc "${filtered_args[@]}"
 fi

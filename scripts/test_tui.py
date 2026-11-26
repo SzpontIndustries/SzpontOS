@@ -59,8 +59,8 @@ def run_test():
 
                 if not test_sent and "root@szpontos-box:/" in clean_chunk and "Type 'help'" in clean_chunk:
                     time.sleep(0.5)
-                    print("\n[TEST] Sending /bin/tuitest command to shell...")
-                    proc.stdin.write(b"/bin/tuitest\n")
+                    print("\n[TEST] Sending /usr/tbin/tuitest command to shell...")
+                    proc.stdin.write(b"/usr/tbin/tuitest\n")
                     proc.stdin.flush()
                     test_sent = True
 

@@ -69,7 +69,14 @@ static ssize_t signalfd_vfs_read(vfs_node_t *node, off_t offset, size_t size, vo
         }
 
         /* Check if unblocked signals are pending to break wait */
-        if (proc->pending_signals & ~proc->blocked_signals) {
+        thread_t *sfd_self = sched_get_current_thread();
+        uint32_t sfd_pend = proc->pending_signals;
+        uint32_t sfd_mask = 0;
+        if (sfd_self) {
+            sfd_pend |= sfd_self->thread_pending;
+            sfd_mask = sfd_self->blocked_signals;
+        }
+        if (sfd_pend & ~sfd_mask) {
             spinlock_release(&ctx->lock);
             return -4; /* -EINTR */
         }
@@ -224,7 +231,8 @@ int64_t sys_signalfd4(int fd, const sigset_t *mask, size_t sizemask, int flags) 
     }
 
     fdesc->node = node;
-    fdesc->flags = O_RDONLY;
+    /* Linux creates signalfd descriptors O_RDWR (see timerfd note). */
+    fdesc->flags = O_RDWR;
     if (flags & SFD_NONBLOCK)
         fdesc->flags |= 0x0800; /* O_NONBLOCK */
     fdesc->refcount = 1;

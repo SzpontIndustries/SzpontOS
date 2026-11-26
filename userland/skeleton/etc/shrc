@@ -40,7 +40,7 @@ Core Rescue / Boot Commands (/bin/):
 
 User Applications & Utilities (/usr/bin/):
   clear, clock, curl, donut, env, fastfetch, file, find,
-  free, git, grep, groupadd, head, hello, host, httpd, httpget,
+  free, git, grep, groupadd, head, host, httpd, httpget,
   id, killall, lspci, lsusb, makaljer, nano, nc, openssl,
   startx, sudo, szpontdesktop, szpontlogin, szponterm, tail,
   top, uptime, useradd, userdel, wc, whoami, xterm, zsh

@@ -43,6 +43,13 @@ static inline void list_add_tail(list_node_t *list, list_node_t *new_node) {
 }
 
 static inline void list_remove(list_node_t *node) {
+    if (!node || !node->prev || !node->next) {
+        if (node) {
+            node->prev = node;
+            node->next = node;
+        }
+        return;
+    }
     node->prev->next = node->next;
     node->next->prev = node->prev;
     node->prev = node;

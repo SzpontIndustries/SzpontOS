@@ -53,9 +53,9 @@ def run_test():
                     time.sleep(0.5)
                     print("\n[TEST] Sending test commands: timerfdtest, signalfdtest, sysfstest...")
                     commands = [
-                        "/bin/timerfdtest",
-                        "/bin/signalfdtest",
-                        "/bin/sysfstest",
+                        "/usr/tbin/timerfdtest",
+                        "/usr/tbin/signalfdtest",
+                        "/usr/tbin/sysfstest",
                         "echo ALL_SUBSYSTEM_TESTS_COMPLETED\n"
                     ]
                     for cmd in commands:

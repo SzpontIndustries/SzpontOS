@@ -48,15 +48,36 @@
 #define PROCFS_PID_STATM 106
 #define PROCFS_PID_MAPS 107
 #define PROCFS_PID_ENVIRON 108
+#define PROCFS_PID_TASKDIR 109
+#define PROCFS_PID_FDDIR 110
+#define PROCFS_TID_DIR 111
+#define PROCFS_TID_STATUS 112
+#define PROCFS_TID_COMM 113
+#define PROCFS_TID_STAT 114
+#define PROCFS_FD_LINK 115
+#define PROCFS_SYS_DIR 116
+#define PROCFS_SYS_FILE 117
+
+/* index values for PROCFS_SYS_FILE */
+#define PROCFS_SYS_OSTYPE 0
+#define PROCFS_SYS_OSRELEASE 1
+#define PROCFS_SYS_HOSTNAME 2
 
 typedef struct procfs_file_data {
     uint32_t type;
     pid_t pid;
+    tid_t tid; /* TID-dir owner / TID-file owner */
+    int index; /* fd number for FD_LINK, sys file id for SYS_FILE, sys dir level for SYS_DIR */
 } procfs_file_data_t;
 
 static vfs_ops_t g_procfs_root_ops;
 static vfs_ops_t g_procfs_pid_dir_ops;
 static vfs_ops_t g_procfs_file_ops;
+static vfs_ops_t g_procfs_taskdir_ops;
+static vfs_ops_t g_procfs_tiddir_ops;
+static vfs_ops_t g_procfs_fddir_ops;
+static vfs_ops_t g_procfs_fdlink_ops;
+static vfs_ops_t g_procfs_sysdir_ops;
 static vfs_node_t *g_procfs_root = NULL;
 
 static inline void cpuid(uint32_t leaf, uint32_t subleaf, uint32_t *eax, uint32_t *ebx, uint32_t *ecx, uint32_t *edx) {
@@ -418,6 +439,110 @@ static size_t procfs_gen_proc_environ(process_t *proc, char *buf, size_t max_len
     return ksnprintf(buf, max_len, "PATH=/bin:/usr/bin:/usr/tbin\nUSER=root\nHOME=/root\nTERM=xterm-256color\n");
 }
 
+static const char *procfs_thread_state_str(thread_state_t state) {
+    switch (state) {
+    case THREAD_RUNNING:
+    case THREAD_READY:
+        return "R (running)";
+    case THREAD_BLOCKED:
+    case THREAD_SLEEPING:
+        return "S (sleeping)";
+    case THREAD_ZOMBIE:
+        return "Z (zombie)";
+    default:
+        return "? (unknown)";
+    }
+}
+
+static size_t procfs_gen_tid_status(process_t *proc, thread_t *t, char *buf, size_t max_len) {
+    const char *name = t->name[0] ? t->name : proc->name;
+    return ksnprintf(buf, max_len,
+                     "Name:\t%s\n"
+                     "State:\t%s\n"
+                     "Tgid:\t%d\n"
+                     "Pid:\t%d\n"
+                     "PPid:\t%d\n"
+                     "Uid:\t%d\t%d\t%d\t%d\n"
+                     "Gid:\t%d\t%d\t%d\t%d\n",
+                     name, procfs_thread_state_str(t->state), proc->pid, t->tid, proc->ppid, proc->uid, proc->euid,
+                     proc->uid, proc->euid, proc->gid, proc->egid, proc->gid, proc->egid);
+}
+
+static size_t procfs_gen_tid_comm(process_t *proc, thread_t *t, char *buf, size_t max_len) {
+    const char *comm = t->name[0] ? t->name : proc->name;
+    const char *slash = strrchr(comm, '/');
+    if (slash)
+        comm = slash + 1;
+    return ksnprintf(buf, max_len, "%s\n", comm);
+}
+
+static size_t procfs_gen_tid_stat(process_t *proc, thread_t *t, char *buf, size_t max_len) {
+    char state_char = 'R';
+    if (t->state == THREAD_BLOCKED || t->state == THREAD_SLEEPING)
+        state_char = 'S';
+    else if (t->state == THREAD_ZOMBIE)
+        state_char = 'Z';
+
+    const char *comm = t->name[0] ? t->name : proc->name;
+    const char *slash = strrchr(comm, '/');
+    if (slash)
+        comm = slash + 1;
+
+    return ksnprintf(buf, max_len, "%d (%s) %c %d %d %d 0 -1 4194304 0 0 0 0 0 0 0 0 20 0 1 0 100 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n",
+                     t->tid, comm, state_char, proc->ppid, proc->pid, proc->pgid);
+}
+
+static size_t procfs_gen_fd_link(process_t *proc, int fd, char *buf, size_t max_len) {
+    if (!proc || fd < 0 || fd >= MAX_FD || !proc->fds[fd] || !proc->fds[fd]->node)
+        return 0;
+    vfs_node_t *target = proc->fds[fd]->node;
+    if (target->flags == VFS_TYPE_SOCKET)
+        return ksnprintf(buf, max_len, "socket:[%u]", target->inode);
+    if (target->flags == VFS_TYPE_PIPE)
+        return ksnprintf(buf, max_len, "pipe:[%u]", target->inode);
+    /* Regular nodes only carry a basename; still identifies the target. */
+    return ksnprintf(buf, max_len, "/%s", target->name[0] ? target->name : "unknown");
+}
+
+static size_t procfs_gen_sys_file(int id, char *buf, size_t max_len) {
+    switch (id) {
+    case PROCFS_SYS_OSTYPE:
+        return ksnprintf(buf, max_len, "SzpontOS\n");
+    case PROCFS_SYS_OSRELEASE:
+        return ksnprintf(buf, max_len, "0.1.0\n");
+    case PROCFS_SYS_HOSTNAME: {
+        char hostname[64] = "szpontos";
+        vfs_node_t *node = vfs_lookup("/etc/hostname");
+        if (node && node->ops && node->ops->read) {
+            char file_buf[64];
+            ssize_t bytes = node->ops->read(node, 0, sizeof(file_buf) - 1, (uint8_t *)file_buf);
+            if (bytes > 0) {
+                file_buf[bytes] = '\0';
+                while (bytes > 0 && (file_buf[bytes - 1] == '\n' || file_buf[bytes - 1] == '\r' ||
+                                     file_buf[bytes - 1] == ' ' || file_buf[bytes - 1] == '\t')) {
+                    file_buf[bytes - 1] = '\0';
+                    bytes--;
+                }
+                if (bytes > 0) {
+                    strncpy(hostname, file_buf, sizeof(hostname) - 1);
+                    hostname[sizeof(hostname) - 1] = '\0';
+                }
+            }
+        }
+        return ksnprintf(buf, max_len, "%s\n", hostname);
+    }
+    default:
+        return 0;
+    }
+}
+
+/* Resolve a pid-dir pid to a process, mapping 0 to the caller. */
+static process_t *procfs_resolve_pid(pid_t pid) {
+    if (pid == 0)
+        return sched_get_current_process();
+    return process_get_by_pid(pid);
+}
+
 /* =========================================================================
  * VFS Operations: File Read
  * ========================================================================= */
@@ -485,11 +610,7 @@ static ssize_t procfs_file_read(vfs_node_t *node, off_t offset, size_t size, voi
         content_len = procfs_gen_usb(tmp_buf, sizeof(tmp_buf));
         break;
     default: {
-        process_t *proc = process_get_by_pid(data->pid);
-        if (!proc) {
-            if (data->pid == 0)
-                proc = sched_get_current_process();
-        }
+        process_t *proc = procfs_resolve_pid(data->pid);
         if (!proc)
             return 0;
 
@@ -521,6 +642,23 @@ static ssize_t procfs_file_read(vfs_node_t *node, off_t offset, size_t size, voi
         case PROCFS_PID_ENVIRON:
             content_len = procfs_gen_proc_environ(proc, tmp_buf, sizeof(tmp_buf));
             break;
+        case PROCFS_TID_STATUS:
+        case PROCFS_TID_COMM:
+        case PROCFS_TID_STAT: {
+            thread_t *t = process_get_thread_by_tid(proc, data->tid);
+            if (!t)
+                return 0;
+            if (data->type == PROCFS_TID_STATUS)
+                content_len = procfs_gen_tid_status(proc, t, tmp_buf, sizeof(tmp_buf));
+            else if (data->type == PROCFS_TID_COMM)
+                content_len = procfs_gen_tid_comm(proc, t, tmp_buf, sizeof(tmp_buf));
+            else
+                content_len = procfs_gen_tid_stat(proc, t, tmp_buf, sizeof(tmp_buf));
+            break;
+        }
+        case PROCFS_SYS_FILE:
+            content_len = procfs_gen_sys_file(data->index, tmp_buf, sizeof(tmp_buf));
+            break;
         default:
             break;
         }
@@ -538,32 +676,68 @@ static ssize_t procfs_file_read(vfs_node_t *node, off_t offset, size_t size, voi
     return (ssize_t)to_copy;
 }
 
-static vfs_node_t *procfs_create_file_node(const char *name, uint32_t type, pid_t pid) {
+static vfs_node_t *procfs_create_node(const char *name, uint32_t type, pid_t pid, tid_t tid, int index,
+                                        vfs_ops_t *ops, uint32_t vfs_type, uint32_t perm) {
     vfs_node_t *node = (vfs_node_t *)kzalloc(sizeof(vfs_node_t));
     if (!node)
         return NULL;
 
     strncpy(node->name, name, sizeof(node->name) - 1);
-    node->flags = VFS_TYPE_FILE;
-    node->permissions = 0444; /* r--r--r-- */
+    node->flags = vfs_type;
+    node->permissions = perm;
     node->uid = 0;
     node->gid = 0;
-    node->ops = &g_procfs_file_ops;
+    node->ops = ops;
 
     procfs_file_data_t *data = (procfs_file_data_t *)kzalloc(sizeof(procfs_file_data_t));
+    if (!data) {
+        kfree(node);
+        return NULL;
+    }
     data->type = type;
     data->pid = pid;
+    data->tid = tid;
+    data->index = index;
     node->device_data = data;
 
     return node;
+}
+
+static vfs_node_t *procfs_create_file_node(const char *name, uint32_t type, pid_t pid) {
+    return procfs_create_node(name, type, pid, 0, 0, &g_procfs_file_ops, VFS_TYPE_FILE, 0444);
+}
+
+static ssize_t procfs_fdlink_readlink(vfs_node_t *node, char *buf, size_t bufsiz) {
+    if (!node || !buf || bufsiz == 0)
+        return -22; /* -EINVAL */
+    procfs_file_data_t *data = (procfs_file_data_t *)node->device_data;
+    if (!data)
+        return -2; /* -ENOENT */
+    process_t *proc = procfs_resolve_pid(data->pid);
+    if (!proc)
+        return -2; /* -ENOENT */
+
+    char target[160];
+    size_t len = procfs_gen_fd_link(proc, data->index, target, sizeof(target));
+    if (len == 0)
+        return -2; /* -ENOENT: fd closed since lookup */
+    if (len > bufsiz)
+        len = bufsiz;
+    memcpy(buf, target, len);
+    return (ssize_t)len;
 }
 
 /* =========================================================================
  * VFS Operations: Directory Readdir & Finddir for /proc/<pid>/
  * ========================================================================= */
 
-static const char *g_proc_pid_files[] = {"status", "cmdline", "comm", "cwd", "exe", "stat", "statm", "maps", "environ"};
+static const char *g_proc_pid_files[] = {"status", "cmdline", "comm",  "cwd",  "exe",  "stat", "statm",
+                                           "maps",   "environ", "task", "fd"};
 #define PROC_PID_FILE_COUNT (sizeof(g_proc_pid_files) / sizeof(g_proc_pid_files[0]))
+
+static bool procfs_pid_entry_is_dir(const char *name) {
+    return strcmp(name, "task") == 0 || strcmp(name, "fd") == 0;
+}
 
 static struct vfs_dirent *procfs_pid_dir_readdir(vfs_node_t *node, uint32_t index) {
     (void)node;
@@ -573,7 +747,7 @@ static struct vfs_dirent *procfs_pid_dir_readdir(vfs_node_t *node, uint32_t inde
 
     strncpy(dirent.name, g_proc_pid_files[index], sizeof(dirent.name) - 1);
     dirent.inode = index + 100;
-    dirent.type = VFS_TYPE_FILE;
+    dirent.type = procfs_pid_entry_is_dir(g_proc_pid_files[index]) ? VFS_TYPE_DIRECTORY : VFS_TYPE_FILE;
     return &dirent;
 }
 
@@ -601,7 +775,216 @@ static struct vfs_node *procfs_pid_dir_finddir(vfs_node_t *node, const char *nam
         return procfs_create_file_node("maps", PROCFS_PID_MAPS, pid);
     if (strcmp(name, "environ") == 0)
         return procfs_create_file_node("environ", PROCFS_PID_ENVIRON, pid);
+    if (strcmp(name, "task") == 0)
+        return procfs_create_node("task", PROCFS_PID_TASKDIR, pid, 0, 0, &g_procfs_taskdir_ops,
+                                  VFS_TYPE_DIRECTORY, 0555);
+    if (strcmp(name, "fd") == 0)
+        return procfs_create_node("fd", PROCFS_PID_FDDIR, pid, 0, 0, &g_procfs_fddir_ops, VFS_TYPE_DIRECTORY,
+                                  0555);
 
+    return NULL;
+}
+
+/* =========================================================================
+ * VFS Operations: /proc/<pid>/task/ and /proc/<pid>/task/<tid>/
+ * The tree is rebuilt from the process table on every lookup/readdir, so a
+ * directory can never describe a thread that has already gone.
+ * ========================================================================= */
+
+static struct vfs_dirent *procfs_taskdir_readdir(vfs_node_t *node, uint32_t index) {
+    static vfs_dirent_t dirent;
+    if (!node)
+        return NULL;
+    procfs_file_data_t *data = (procfs_file_data_t *)node->device_data;
+    process_t *proc = data ? procfs_resolve_pid(data->pid) : NULL;
+    if (!proc)
+        return NULL;
+
+    tid_t tids[64];
+    size_t count = process_get_tid_list(proc, tids, 64);
+    if (index >= count)
+        return NULL;
+
+    ksnprintf(dirent.name, sizeof(dirent.name), "%d", tids[index]);
+    dirent.inode = 2000 + tids[index];
+    dirent.type = VFS_TYPE_DIRECTORY;
+    return &dirent;
+}
+
+static struct vfs_node *procfs_taskdir_finddir(vfs_node_t *node, const char *name) {
+    if (!node || !name)
+        return NULL;
+    procfs_file_data_t *data = (procfs_file_data_t *)node->device_data;
+    pid_t pid = data ? data->pid : 0;
+
+    bool is_num = name[0] != '\0';
+    for (size_t i = 0; name[i]; i++) {
+        if (name[i] < '0' || name[i] > '9') {
+            is_num = false;
+            break;
+        }
+    }
+    if (!is_num)
+        return NULL;
+
+    int tid = 0;
+    for (size_t i = 0; name[i]; i++) {
+        tid = tid * 10 + (name[i] - '0');
+    }
+
+    process_t *proc = procfs_resolve_pid(pid);
+    if (!proc || !process_get_thread_by_tid(proc, tid))
+        return NULL;
+    return procfs_create_node(name, PROCFS_TID_DIR, pid, tid, 0, &g_procfs_tiddir_ops, VFS_TYPE_DIRECTORY, 0555);
+}
+
+static const char *g_proc_tid_files[] = {"status", "comm", "stat"};
+#define PROC_TID_FILE_COUNT (sizeof(g_proc_tid_files) / sizeof(g_proc_tid_files[0]))
+
+static struct vfs_dirent *procfs_tiddir_readdir(vfs_node_t *node, uint32_t index) {
+    (void)node;
+    static vfs_dirent_t dirent;
+    if (index >= PROC_TID_FILE_COUNT)
+        return NULL;
+
+    strncpy(dirent.name, g_proc_tid_files[index], sizeof(dirent.name) - 1);
+    dirent.inode = 2100 + index;
+    dirent.type = VFS_TYPE_FILE;
+    return &dirent;
+}
+
+static struct vfs_node *procfs_tiddir_finddir(vfs_node_t *node, const char *name) {
+    if (!node || !name)
+        return NULL;
+    procfs_file_data_t *data = (procfs_file_data_t *)node->device_data;
+    if (!data)
+        return NULL;
+
+    /* The thread may have exited since the task/ listing; re-validate. */
+    process_t *proc = procfs_resolve_pid(data->pid);
+    if (!proc || !process_get_thread_by_tid(proc, data->tid))
+        return NULL;
+
+    if (strcmp(name, "status") == 0)
+        return procfs_create_node("status", PROCFS_TID_STATUS, data->pid, data->tid, 0, &g_procfs_file_ops,
+                                  VFS_TYPE_FILE, 0444);
+    if (strcmp(name, "comm") == 0)
+        return procfs_create_node("comm", PROCFS_TID_COMM, data->pid, data->tid, 0, &g_procfs_file_ops,
+                                  VFS_TYPE_FILE, 0444);
+    if (strcmp(name, "stat") == 0)
+        return procfs_create_node("stat", PROCFS_TID_STAT, data->pid, data->tid, 0, &g_procfs_file_ops,
+                                  VFS_TYPE_FILE, 0444);
+    return NULL;
+}
+
+/* =========================================================================
+ * VFS Operations: /proc/<pid>/fd/ (symlink farm over open descriptors)
+ * ========================================================================= */
+
+static struct vfs_dirent *procfs_fddir_readdir(vfs_node_t *node, uint32_t index) {
+    static vfs_dirent_t dirent;
+    if (!node)
+        return NULL;
+    procfs_file_data_t *data = (procfs_file_data_t *)node->device_data;
+    process_t *proc = data ? procfs_resolve_pid(data->pid) : NULL;
+    if (!proc)
+        return NULL;
+
+    uint32_t seen = 0;
+    for (int fd = 0; fd < MAX_FD; fd++) {
+        if (!proc->fds[fd])
+            continue;
+        if (seen == index) {
+            ksnprintf(dirent.name, sizeof(dirent.name), "%d", fd);
+            dirent.inode = 3000 + fd;
+            dirent.type = VFS_TYPE_SYMLINK;
+            return &dirent;
+        }
+        seen++;
+    }
+    return NULL;
+}
+
+static struct vfs_node *procfs_fddir_finddir(vfs_node_t *node, const char *name) {
+    if (!node || !name)
+        return NULL;
+    procfs_file_data_t *data = (procfs_file_data_t *)node->device_data;
+    pid_t pid = data ? data->pid : 0;
+
+    bool is_num = name[0] != '\0';
+    for (size_t i = 0; name[i]; i++) {
+        if (name[i] < '0' || name[i] > '9') {
+            is_num = false;
+            break;
+        }
+    }
+    if (!is_num)
+        return NULL;
+
+    int fd = 0;
+    for (size_t i = 0; name[i]; i++) {
+        fd = fd * 10 + (name[i] - '0');
+    }
+    if (fd < 0 || fd >= MAX_FD)
+        return NULL;
+
+    process_t *proc = procfs_resolve_pid(pid);
+    if (!proc || !proc->fds[fd])
+        return NULL;
+    return procfs_create_node(name, PROCFS_FD_LINK, pid, 0, fd, &g_procfs_fdlink_ops, VFS_TYPE_SYMLINK, 0777);
+}
+
+/* =========================================================================
+ * VFS Operations: /proc/sys/ (kernel.* parameters Chromium reads at startup)
+ * ========================================================================= */
+
+static struct vfs_dirent *procfs_sysdir_readdir(vfs_node_t *node, uint32_t index) {
+    static vfs_dirent_t dirent;
+    if (!node)
+        return NULL;
+    procfs_file_data_t *data = (procfs_file_data_t *)node->device_data;
+    int level = data ? data->index : 0;
+
+    if (level == 0) {
+        if (index != 0)
+            return NULL;
+        strncpy(dirent.name, "kernel", sizeof(dirent.name) - 1);
+        dirent.inode = 4000;
+        dirent.type = VFS_TYPE_DIRECTORY;
+        return &dirent;
+    }
+
+    static const char *kfiles[] = {"ostype", "osrelease", "hostname"};
+    if (index >= 3)
+        return NULL;
+    strncpy(dirent.name, kfiles[index], sizeof(dirent.name) - 1);
+    dirent.inode = 4100 + index;
+    dirent.type = VFS_TYPE_FILE;
+    return &dirent;
+}
+
+static struct vfs_node *procfs_sysdir_finddir(vfs_node_t *node, const char *name) {
+    if (!node || !name)
+        return NULL;
+    procfs_file_data_t *data = (procfs_file_data_t *)node->device_data;
+    int level = data ? data->index : 0;
+
+    if (level == 0) {
+        if (strcmp(name, "kernel") == 0)
+            return procfs_create_node("kernel", PROCFS_SYS_DIR, 0, 0, 1, &g_procfs_sysdir_ops,
+                                      VFS_TYPE_DIRECTORY, 0555);
+        return NULL;
+    }
+
+    if (strcmp(name, "ostype") == 0)
+        return procfs_create_node("ostype", PROCFS_SYS_FILE, 0, 0, PROCFS_SYS_OSTYPE, &g_procfs_file_ops,
+                                  VFS_TYPE_FILE, 0444);
+    if (strcmp(name, "osrelease") == 0)
+        return procfs_create_node("osrelease", PROCFS_SYS_FILE, 0, 0, PROCFS_SYS_OSRELEASE, &g_procfs_file_ops,
+                                  VFS_TYPE_FILE, 0444);
+    if (strcmp(name, "hostname") == 0)
+        return procfs_create_node("hostname", PROCFS_SYS_FILE, 0, 0, PROCFS_SYS_HOSTNAME, &g_procfs_file_ops,
+                                  VFS_TYPE_FILE, 0444);
     return NULL;
 }
 
@@ -640,8 +1023,12 @@ static const struct {
                              {"self", PROCFS_TYPE_SELF},       {"modules", PROCFS_TYPE_MODULES},
                              {"dmesg", PROCFS_TYPE_DMESG},     {"kmsg", PROCFS_TYPE_DMESG},
                              {"sysctl", PROCFS_TYPE_SYSCTL},   {"pci", PROCFS_TYPE_PCI},
-                             {"usb", PROCFS_TYPE_USB}};
+                             {"usb", PROCFS_TYPE_USB},         {"sys", PROCFS_SYS_DIR}};
 #define PROC_STATIC_COUNT (sizeof(g_proc_static_entries) / sizeof(g_proc_static_entries[0]))
+
+static bool procfs_static_is_special(const char *name) {
+    return strcmp(name, "self") == 0 || strcmp(name, "sys") == 0;
+}
 
 static struct vfs_dirent *procfs_root_readdir(vfs_node_t *node, uint32_t index) {
     (void)node;
@@ -650,7 +1037,12 @@ static struct vfs_dirent *procfs_root_readdir(vfs_node_t *node, uint32_t index) 
     if (index < PROC_STATIC_COUNT) {
         strncpy(dirent.name, g_proc_static_entries[index].name, sizeof(dirent.name) - 1);
         dirent.inode = index + 1;
-        dirent.type = (g_proc_static_entries[index].type == PROCFS_TYPE_SELF) ? VFS_TYPE_SYMLINK : VFS_TYPE_FILE;
+        if (strcmp(g_proc_static_entries[index].name, "self") == 0)
+            dirent.type = VFS_TYPE_SYMLINK;
+        else if (g_proc_static_entries[index].type == PROCFS_SYS_DIR)
+            dirent.type = VFS_TYPE_DIRECTORY;
+        else
+            dirent.type = VFS_TYPE_FILE;
         return &dirent;
     }
 
@@ -679,8 +1071,14 @@ static struct vfs_node *procfs_root_finddir(vfs_node_t *node, const char *name) 
         return procfs_create_pid_dir(pid);
     }
 
+    if (strcmp(name, "sys") == 0) {
+        return procfs_create_node("sys", PROCFS_SYS_DIR, 0, 0, 0, &g_procfs_sysdir_ops, VFS_TYPE_DIRECTORY,
+                                  0555);
+    }
+
     for (size_t i = 0; i < PROC_STATIC_COUNT; i++) {
-        if (strcmp(name, "self") != 0 && strcmp(name, g_proc_static_entries[i].name) == 0) {
+        if (!procfs_static_is_special(g_proc_static_entries[i].name) &&
+            strcmp(name, g_proc_static_entries[i].name) == 0) {
             return procfs_create_file_node(name, g_proc_static_entries[i].type, 0);
         }
     }
@@ -724,6 +1122,25 @@ vfs_node_t *procfs_init(void) {
 
     memset(&g_procfs_file_ops, 0, sizeof(vfs_ops_t));
     g_procfs_file_ops.read = procfs_file_read;
+
+    memset(&g_procfs_taskdir_ops, 0, sizeof(vfs_ops_t));
+    g_procfs_taskdir_ops.readdir = procfs_taskdir_readdir;
+    g_procfs_taskdir_ops.finddir = procfs_taskdir_finddir;
+
+    memset(&g_procfs_tiddir_ops, 0, sizeof(vfs_ops_t));
+    g_procfs_tiddir_ops.readdir = procfs_tiddir_readdir;
+    g_procfs_tiddir_ops.finddir = procfs_tiddir_finddir;
+
+    memset(&g_procfs_fddir_ops, 0, sizeof(vfs_ops_t));
+    g_procfs_fddir_ops.readdir = procfs_fddir_readdir;
+    g_procfs_fddir_ops.finddir = procfs_fddir_finddir;
+
+    memset(&g_procfs_fdlink_ops, 0, sizeof(vfs_ops_t));
+    g_procfs_fdlink_ops.readlink = procfs_fdlink_readlink;
+
+    memset(&g_procfs_sysdir_ops, 0, sizeof(vfs_ops_t));
+    g_procfs_sysdir_ops.readdir = procfs_sysdir_readdir;
+    g_procfs_sysdir_ops.finddir = procfs_sysdir_finddir;
 
     g_procfs_root = (vfs_node_t *)kzalloc(sizeof(vfs_node_t));
     strcpy(g_procfs_root->name, "proc");

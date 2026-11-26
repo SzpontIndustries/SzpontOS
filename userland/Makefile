@@ -23,6 +23,7 @@ skeleton:
 	@chmod 1777 $(ROOTFS_DIR)/tmp $(ROOTFS_DIR)/tmp/.X11-unix 2>/dev/null || true
 	@chmod 755 $(ROOTFS_DIR)/var/empty 2>/dev/null || true
 	@if [ -d $(ROOTFS_SKELETON_DIR) ]; then cp -a $(ROOTFS_SKELETON_DIR)/. $(ROOTFS_DIR)/ 2>/dev/null || true; fi
+	@rm -f $(ROOTFS_DIR)/etc/rc.d/06_compatsmoke
 	@if [ -f $(ROOTFS_SKELETON_DIR)/etc/X11/app-defaults/XTerm ]; then \
 		cp -f $(ROOTFS_SKELETON_DIR)/etc/X11/app-defaults/XTerm $(ROOTFS_DIR)/usr/share/X11/app-defaults/XTerm; \
 		cp -f $(ROOTFS_SKELETON_DIR)/etc/X11/app-defaults/XTerm $(ROOTFS_DIR)/usr/lib/X11/app-defaults/XTerm; \

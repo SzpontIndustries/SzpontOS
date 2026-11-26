@@ -31,7 +31,7 @@ limine: limine-bin/limine-bios.sys limine-bin/limine
 # only succeeds on the 2nd `make`.
 # ==============================================================================
 SKELETON_FILES := $(shell find $(ROOTFS_SKELETON_DIR) -type f 2>/dev/null)
-$(BUILD_DIR)/initramfs.tar: $(USERLAND_STAMP) $(MODULES_STAMP) $(THIRDPARTY_STAMP) $(KERNEL_ELF) $(SKELETON_FILES) | build $(ROOTFS_DIR)
+$(BUILD_DIR)/initramfs.tar: $(USERLAND_STAMP) $(MODULES_STAMP) $(THIRDPARTY_STAMP) $(KERNEL_ELF) $(SKELETON_FILES) $(ROOT_DIR)/mk/iso.mk $(ROOT_DIR)/scripts/verify_rootfs.py $(ROOT_DIR)/scripts/make_initramfs.py | build $(ROOTFS_DIR)
 	@mkdir -p $(BUILD_DIR)
 	@mkdir -p $(ROOTFS_DIR)/bin $(ROOTFS_DIR)/sbin $(ROOTFS_DIR)/lib \
 		$(ROOTFS_DIR)/usr/bin $(ROOTFS_DIR)/usr/sbin $(ROOTFS_DIR)/usr/lib $(ROOTFS_DIR)/usr/tbin \
@@ -44,6 +44,8 @@ $(BUILD_DIR)/initramfs.tar: $(USERLAND_STAMP) $(MODULES_STAMP) $(THIRDPARTY_STAM
 	@chmod 1777 $(ROOTFS_DIR)/tmp $(ROOTFS_DIR)/tmp/.X11-unix 2>/dev/null || true
 	@chmod 755 $(ROOTFS_DIR)/var/empty 2>/dev/null || true
 	@if [ -d $(ROOTFS_SKELETON_DIR) ]; then cp -a $(ROOTFS_SKELETON_DIR)/. $(ROOTFS_DIR)/ 2>/dev/null || true; fi
+	@rm -f $(ROOTFS_DIR)/etc/rc.d/06_compatsmoke
+	@for name in $(notdir $(USER_TEST_PROGS)); do rm -f "$(ROOTFS_DIR)/bin/$$name" "$(ROOTFS_DIR)/usr/bin/$$name"; done
 	@if [ -f $(ROOTFS_SKELETON_DIR)/etc/X11/app-defaults/XTerm ]; then \
 		cp -f $(ROOTFS_SKELETON_DIR)/etc/X11/app-defaults/XTerm $(ROOTFS_DIR)/usr/share/X11/app-defaults/XTerm; \
 		cp -f $(ROOTFS_SKELETON_DIR)/etc/X11/app-defaults/XTerm $(ROOTFS_DIR)/usr/share/X11/app-defaults/XTerm-color; \
@@ -66,7 +68,7 @@ $(BUILD_DIR)/initramfs.tar: $(USERLAND_STAMP) $(MODULES_STAMP) $(THIRDPARTY_STAM
 	@if [ -d artwork ]; then cp -r artwork/* $(ROOTFS_DIR)/usr/share/artwork/ 2>/dev/null || true; fi
 	@if [ -f artwork/szpont-detected.jpg ]; then cp artwork/szpont-detected.jpg $(ROOTFS_DIR)/usr/share/artwork/szpont-detected.png 2>/dev/null || true; fi
 	@rm -f $(ROOTFS_DIR)/lib/*.a $(ROOTFS_DIR)/usr/lib/*.a
-	@./scripts/verify_rootfs.py $(ROOTFS_DIR)
+	@./scripts/verify_rootfs.py $(ROOTFS_DIR) $(notdir $(USER_TEST_PROGS))
 	@./scripts/make_initramfs.py $(ROOTFS_DIR) $(BUILD_DIR)/initramfs.tar
 
 initramfs: $(BUILD_DIR)/initramfs.tar

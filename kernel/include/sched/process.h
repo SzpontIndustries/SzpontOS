@@ -94,10 +94,11 @@ typedef struct process {
     uint64_t nvcsw;
     uint64_t nivcsw;
 
-    uint32_t pending_signals;
-    uint32_t blocked_signals;
+    uint32_t pending_signals; /* Process-directed pending set */
+    /* NOTE: the signal mask is per-thread (thread_t.blocked_signals). */
     uintptr_t signal_handlers[32];
     struct sigaction sigactions[32];
+    bool vfork_done; /* Set when a vfork child execs/exits so the blocked parent resumes */
 
     list_node_t threads;
     list_node_t proc_list_node;
@@ -119,8 +120,15 @@ void process_exit(int exit_code);
 void process_destroy_unstarted(process_t *proc);
 pid_t process_waitpid(pid_t pid, int *status, int options);
 process_t *process_get_by_pid(pid_t pid);
+tid_t process_alloc_tid(void);
+bool process_attach_thread(process_t *proc, thread_t *t);
+bool process_is_main_thread(process_t *proc, thread_t *t);
+thread_t *process_get_thread_by_tid(process_t *proc, tid_t tid);
+size_t process_get_tid_list(process_t *proc, tid_t *buf, size_t max_count);
 int process_send_signal(process_t *proc, int sig);
 int process_kill(pid_t pid, int sig);
+int process_tkill(tid_t tid, int sig);
+int process_tgkill(pid_t tgid, tid_t tid, int sig);
 process_t *process_get_foreground(void);
 void process_set_foreground(process_t *proc);
 void process_signal_ctty(vfs_node_t *ctty_node, int sig);

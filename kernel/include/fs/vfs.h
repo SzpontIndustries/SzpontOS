@@ -103,6 +103,11 @@ typedef struct file_descriptor {
     off_t offset;
     uint32_t flags;
     uint32_t refcount;
+    /* memfd(2) sealing state. is_memfd marks files created via memfd_create
+     * so fcntl(F_ADD_SEALS/F_GET_SEALS) can validate the target. */
+    bool is_memfd;
+    bool memfd_allow_sealing;
+    uint32_t memfd_seals; /* F_SEAL_* bitmask */
 } file_descriptor_t;
 
 typedef struct vfs_mount_info {

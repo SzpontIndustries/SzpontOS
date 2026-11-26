@@ -58,6 +58,7 @@ extern "C" {
 #define SYS_getsockopt 55
 #define SYS_clone 56
 #define SYS_fork 57
+#define SYS_vfork 58
 #define SYS_execve 59
 #define SYS_exit 60
 #define SYS_wait4 61
@@ -137,11 +138,14 @@ extern "C" {
 #define SYS_time 201
 #define SYS_futex 202
 #define SYS_sched_getaffinity 204
+#define SYS_set_robust_list 273
+#define SYS_get_robust_list 274
 #define SYS_set_tid_address 218
 #define SYS_clock_settime 227
 #define SYS_clock_gettime 228
 #define SYS_clock_getres 229
 #define SYS_exit_group 231
+#define SYS_tgkill 234
 #define SYS_openat 257
 #define SYS_mkdirat 258
 #define SYS_mknodat 259
@@ -165,6 +169,9 @@ extern "C" {
 #define SYS_inotify_init1 294
 #define SYS_getrandom 318
 #define SYS_memfd_create 319
+#define SYS_seccomp 317
+#define SYS_rseq 334
+#define SYS_clone3 435
 #define SYS_fchdir 81
 #define SYS_clock_nanosleep 230
 #define SYS_signalfd 282

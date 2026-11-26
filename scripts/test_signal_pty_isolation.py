@@ -52,9 +52,9 @@ def run_test():
 
                 if not commands_sent and "root@szpontos-box" in clean_output and "Type 'help'" in clean_output:
                     time.sleep(0.5)
-                    print("\n[TEST] Shell ready. Sending '/bin/ptytest' command...")
+                    print("\n[TEST] Shell ready. Sending '/usr/tbin/ptytest' command...")
                     commands = [
-                        "/bin/ptytest",
+                        "/usr/tbin/ptytest",
                         "echo SIGNAL_TEST_FINISHED\n"
                     ]
                     for cmd in commands:

@@ -71,6 +71,8 @@ REQUIRED_BINARIES = [
     "usr/bin/Xorg",
     "usr/tbin/mathtest",
     "usr/tbin/epolltest",
+    "usr/tbin/corecheck",
+    "usr/tbin/compattest",
 ]
 
 REQUIRED_LIBRARIES = [
@@ -100,7 +102,7 @@ REQUIRED_CONFIGS = [
     "usr/share/X11/app-defaults/XTerm",
 ]
 
-def verify_rootfs(rootfs_dir):
+def verify_rootfs(rootfs_dir, test_names=()):
     print(f"[*] Weryfikacja integralności rootfs: {rootfs_dir}...")
     errors = []
 
@@ -115,7 +117,7 @@ def verify_rootfs(rootfs_dir):
             errors.append(f"Brak katalogu: /{d}")
 
     # 2. Sprawdź binaria
-    for b in REQUIRED_BINARIES:
+    for b in REQUIRED_BINARIES + [f"usr/tbin/{name}" for name in test_names]:
         path = os.path.join(rootfs_dir, b)
         if not os.path.exists(path):
             # Sprawdź alternatywną ścieżkę (np. bin/sshd zamiast usr/sbin/sshd lub na odwrót)
@@ -155,4 +157,4 @@ def verify_rootfs(rootfs_dir):
 
 if __name__ == "__main__":
     target = sys.argv[1] if len(sys.argv) > 1 else "build/rootfs"
-    sys.exit(verify_rootfs(target))
+    sys.exit(verify_rootfs(target, sys.argv[2:]))

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""QEMU regression test: runs /bin/corecheck via QMP-injected PS/2 scancodes."""
+"""QEMU regression test: runs /usr/tbin/corecheck via QMP-injected PS/2 scancodes."""
 import argparse
 import json
 import os
@@ -19,20 +19,22 @@ p.add_argument('--poll-only', action='store_true', help='Route PS/2 keyboard IRQ
 p.add_argument('--throttle', action='store_true', help='Enable QEMU keyboard throttling')
 p.add_argument('--machine', default='pc', choices=['pc', 'q35'])
 p.add_argument('--firmware', help='OVMF code firmware path (optional)')
+p.add_argument('--iso', default=str(ROOT/'build/szpontos.iso'), help='Bootable ISO path')
+p.add_argument('--disk', default=str(ROOT/'build/disk.img'), help='Disk image path')
 p.add_argument('--log', default='/tmp/szpontos-ps2-tty.log')
 args = p.parse_args()
 with tempfile.TemporaryDirectory(prefix='szpontos-qmp-') as tmp:
     qmp_path = pathlib.Path(tmp)/'qmp.sock'
     log_path = pathlib.Path(args.log)
     cmd = ['qemu-system-x86_64','-M',args.machine,'-cpu','max','-m','512M',
-           '-display','none','-cdrom',str(ROOT/'build/szpontos.iso'),
-           '-drive',f'file={ROOT}/build/disk.img,format=raw,if=ide,snapshot=on,file.locking=off',
+           '-display','none','-cdrom',args.iso,
+           '-drive',f'file={args.disk},format=raw,if=ide,snapshot=on,file.locking=off',
            '-serial','stdio','-qmp',f'unix:{qmp_path},server=on,wait=off','-no-reboot','-no-shutdown']
     if args.usb_image:
         index=cmd.index('-cdrom')
         del cmd[index:index+2]
         cmd += ['-device','qemu-xhci,id=bootxhci',
-                '-drive',f'if=none,id=bootusb,format=raw,readonly=on,file={ROOT}/build/szpontos.iso',
+                '-drive',f'if=none,id=bootusb,format=raw,readonly=on,file={args.iso}',
                 '-device','usb-storage,bus=bootxhci.0,drive=bootusb,bootindex=1']
     if args.poll_only:
         cmd += ['-global','i8042.kbd-irq=7']
@@ -72,7 +74,7 @@ with tempfile.TemporaryDirectory(prefix='szpontos-qmp-') as tmp:
                         if 'error' in reply: raise RuntimeError(reply)
                         if 'return' in reply: return reply['return']
                 qmp('qmp_capabilities')
-                proc.stdin.write(b'/bin/corecheck\n'); proc.stdin.flush()
+                proc.stdin.write(b'/usr/tbin/corecheck\n'); proc.stdin.flush()
                 wait_for('TTY_CANON_READY',120)
                 def key(*codes):
                     qmp('send-key',{'keys':[{'type':'qcode','data':c} for c in codes],'hold-time':20})

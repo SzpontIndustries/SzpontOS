@@ -28,6 +28,15 @@ typedef struct thread {
     uintptr_t user_entry;          /* User mode entry point (RIP) */
     uintptr_t fs_base;             /* Thread-Local Storage (TLS) FS base */
     uintptr_t clear_child_tid;     /* Pointer to clear and wake on thread exit */
+    uintptr_t robust_head;         /* struct robust_list_head* for set_robust_list(2) */
+    size_t robust_len;             /* sizeof(struct robust_list_head), 24 on LP64 */
+    uintptr_t rseq_ptr;            /* struct rseq* for rseq(2), 0 when unregistered */
+    uint32_t rseq_len;             /* Must be 32 when registered */
+    uint32_t rseq_flags;           /* Reserved, currently always 0 */
+    uint32_t rseq_sig;             /* Abort signature, stored but not enforced */
+    int pdeathsig;                 /* PR_SET_PDEATHSIG signal, 0 = disabled */
+    uint32_t thread_pending;       /* Thread-private pending signals (tkill/tgkill) */
+    uint32_t blocked_signals;      /* Per-thread signal mask (sigprocmask/pthread_sigmask) */
 
     uint64_t sleep_until_tick;
     uint64_t scheduled_at_ns;      /* Monotonic timestamp (ns) when thread started running */

@@ -193,7 +193,11 @@ void isr_handler(interrupt_frame_t *frame) {
             uint32_t fatal_mask = (1U << SIGHUP) | (1U << SIGINT) | (1U << SIGQUIT) |
                                   (1U << SIGKILL) | (1U << SIGTERM) | (1U << SIGSEGV) |
                                   (1U << SIGILL);
-            uint32_t pending_fatal = curr_proc->pending_signals & fatal_mask & ~curr_proc->blocked_signals;
+            thread_t *curr_thread = sched_get_current_thread();
+            uint32_t idt_mask = curr_thread ? curr_thread->blocked_signals : 0;
+            uint32_t pending_fatal = curr_proc->pending_signals & fatal_mask & ~idt_mask;
+            if (curr_thread)
+                pending_fatal |= curr_thread->thread_pending & fatal_mask & ~idt_mask;
             if (pending_fatal) {
                 for (int s = 1; s < 32; s++) {
                     if (pending_fatal & (1U << s)) {

@@ -44,7 +44,6 @@ USR_BIN_PROGS := \
     $(ROOTFS_DIR)/usr/bin/grep \
     $(ROOTFS_DIR)/usr/bin/groupadd \
     $(ROOTFS_DIR)/usr/bin/head \
-    $(ROOTFS_DIR)/usr/bin/hello \
     $(ROOTFS_DIR)/usr/bin/host \
     $(ROOTFS_DIR)/usr/bin/httpd \
     $(ROOTFS_DIR)/usr/bin/httpget \
@@ -58,7 +57,6 @@ USR_BIN_PROGS := \
     $(ROOTFS_DIR)/usr/bin/sudo \
     $(ROOTFS_DIR)/usr/bin/szpontdetected \
     $(ROOTFS_DIR)/usr/bin/szponterm \
-    $(ROOTFS_DIR)/usr/bin/szpontui_demo \
     $(ROOTFS_DIR)/usr/bin/tail \
     $(ROOTFS_DIR)/usr/bin/top \
     $(ROOTFS_DIR)/usr/bin/uptime \
@@ -67,32 +65,7 @@ USR_BIN_PROGS := \
     $(ROOTFS_DIR)/usr/bin/wc \
     $(ROOTFS_DIR)/usr/bin/whoami
 
-TEST_PROGS := \
-    $(ROOTFS_DIR)/usr/tbin/dltest \
-    $(ROOTFS_DIR)/usr/tbin/mathtest \
-    $(ROOTFS_DIR)/usr/tbin/threadtest \
-    $(ROOTFS_DIR)/usr/tbin/tuitest \
-    $(ROOTFS_DIR)/usr/tbin/drmtest \
-    $(ROOTFS_DIR)/usr/tbin/randtest \
-    $(ROOTFS_DIR)/usr/tbin/tmpfstest \
-    $(ROOTFS_DIR)/usr/tbin/shmtest \
-    $(ROOTFS_DIR)/usr/tbin/ptytest \
-    $(ROOTFS_DIR)/usr/tbin/kqueuetest \
-    $(ROOTFS_DIR)/usr/tbin/mousetest \
-    $(ROOTFS_DIR)/usr/tbin/unixtest \
-    $(ROOTFS_DIR)/usr/tbin/gittest \
-    $(ROOTFS_DIR)/usr/tbin/curltest \
-    $(ROOTFS_DIR)/usr/tbin/mesadrmtest \
-    $(ROOTFS_DIR)/usr/tbin/cpptest \
-    $(ROOTFS_DIR)/usr/tbin/gltriangle \
-    $(ROOTFS_DIR)/usr/tbin/glxgears \
-    $(ROOTFS_DIR)/usr/tbin/epolltest \
-    $(ROOTFS_DIR)/usr/tbin/eventfdtest \
-    $(ROOTFS_DIR)/usr/tbin/inotifytest \
-    $(ROOTFS_DIR)/usr/tbin/timerfdtest \
-    $(ROOTFS_DIR)/usr/tbin/signalfdtest \
-    $(ROOTFS_DIR)/usr/tbin/compattest \
-    $(ROOTFS_DIR)/usr/tbin/sysfstest
+TEST_PROGS := $(USER_TEST_PROGS)
 
 .PHONY: all progs symlinks
 
@@ -132,6 +105,10 @@ $(BUILD_DIR)/userland/bin/%.o: $(ROOT_DIR)/userland/bin/%.c | $(SYSROOT_STAMP) $
 	@mkdir -p $(BUILD_DIR)/userland/bin
 	@echo "  [CC]  $<"
 	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/$*.d -isystem $(abspath $(SYSROOT_DIR))/usr/include -I$(abspath $(SYSROOT_DIR))/usr/include -c $< -o $@
+
+$(BUILD_DIR)/userland/bin/corecheck.o: $(ROOT_DIR)/scripts/tests/corecheck.c | $(SYSROOT_STAMP) $(BUILD_DIR)/userland/bin
+	@echo "  [CC]  $<"
+	@$(CC) $(USER_CFLAGS) -MMD -MP -MF $(BUILD_DIR)/userland/bin/corecheck.d -c $< -o $@
 
 $(ROOTFS_DIR)/bin $(ROOTFS_DIR)/usr/bin $(ROOTFS_DIR)/usr/tbin:
 	@mkdir -p $@
@@ -277,8 +254,8 @@ $(BUILD_DIR)/userland/bin/szpontui_demo.o: $(ROOT_DIR)/userland/bin/szpontui_dem
 	@echo "  [CXX-SZPONTUI-DEMO] $<"
 	@$(CXX) $(USER_CXXFLAGS) -isystem $(SYSROOT_DIR)/usr/include/SzpontUI -I$(SYSROOT_DIR)/usr/include/SzpontUI -isystem $(SYSROOT_DIR)/usr/include/freetype2 -isystem $(SYSROOT_DIR)/usr/include/harfbuzz -isystem $(SYSROOT_DIR)/usr/include/pixman-1 -MMD -MP -MF $(BUILD_DIR)/userland/bin/szpontui_demo.d -c $< -o $@
 
-$(ROOTFS_DIR)/usr/bin/szpontui_demo: $(BUILD_DIR)/userland/bin/szpontui_demo.o $(CRT0_O) $(CRTI_O) $(CRTN_O) | $(SYSROOT_STAMP) $(ROOTFS_DIR)/usr/bin $(LIBC_SO) $(LIBM_SO) $(LIBSTDCXX_SO) $(ROOTFS_DIR)/usr/lib/libszpontui.so
-	@mkdir -p $(ROOTFS_DIR)/usr/bin
+$(ROOTFS_DIR)/usr/tbin/szpontui_demo: $(BUILD_DIR)/userland/bin/szpontui_demo.o $(CRT0_O) $(CRTI_O) $(CRTN_O) | $(SYSROOT_STAMP) $(ROOTFS_DIR)/usr/tbin $(LIBC_SO) $(LIBM_SO) $(LIBSTDCXX_SO) $(ROOTFS_DIR)/usr/lib/libszpontui.so
+	@mkdir -p $(ROOTFS_DIR)/usr/tbin
 	@rm -f $@
 	@echo "  [LD-SZPONTUI-DEMO] $@"
 	@$(CC) -O2 -ffreestanding -fno-builtin -nostdlib -B$(abspath $(SYSROOT_DIR))/usr/lib $(CRT0_O) $(CRTI_O) $$($(CC) -print-file-name=crtbegin.o) $< $$($(CC) -print-file-name=crtend.o) $(CRTN_O) \

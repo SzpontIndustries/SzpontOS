@@ -23,6 +23,23 @@ static process_t *g_idle_proc = NULL;
 extern void arch_switch_context(uintptr_t *old_rsp, uintptr_t new_rsp, void *old_fpu, const void *new_fpu,
                                 volatile int32_t *running_cpu);
 
+/* Publish the new CPU id into the next thread's rseq area (glibc ≥ 2.35).
+ * Uses an explicit pagemap lookup because copy_to_user() resolves against
+ * the *current* process, while next may belong to another process. The
+ * 32-byte-aligned struct never crosses a page boundary for its first 8
+ * bytes, so a single page lookup covers cpu_id_start/cpu_id. Failures are
+ * silently ignored: the thread will observe a stale id and retry. */
+static void rseq_update_cpu(thread_t *next, uint32_t cpu_id) {
+    if (!next || next->rseq_ptr == 0 || !next->process || !next->process->pagemap)
+        return;
+    uintptr_t phys = vmm_user_page_phys(next->process->pagemap, next->rseq_ptr, true);
+    if (!phys)
+        return;
+    volatile uint32_t *u = (volatile uint32_t *)PHYS_TO_VIRT(phys);
+    u[0] = cpu_id;
+    u[1] = cpu_id;
+}
+
 static void idle_thread_func(void) {
     while (1) {
         __asm__ volatile("sti; hlt; cli");
@@ -74,13 +91,18 @@ bool sched_is_started(void) {
     return g_sched_started;
 }
 
+static void sched_yield_locked(uint64_t flags);
+
 void sched_add_thread(thread_t *thread) {
     if (!thread)
         return;
     uint64_t flags;
     spinlock_acquire_irqsave(&g_sched_lock, &flags);
-    thread->state = THREAD_READY;
-    list_add_tail(&g_ready_queue, &thread->sched_node);
+    if (thread->state != THREAD_ZOMBIE) {
+        list_remove(&thread->sched_node);
+        thread->state = THREAD_READY;
+        list_add_tail(&g_ready_queue, &thread->sched_node);
+    }
     spinlock_release_irqrestore(&g_sched_lock, flags);
 }
 
@@ -107,17 +129,23 @@ process_t *sched_get_current_process(void) {
     return curr ? curr->process : NULL;
 }
 
+static bool sched_handle_zombie_or_exit(thread_t *curr, process_t *proc) {
+    if (curr->state == THREAD_ZOMBIE || (proc && proc->status == PROCESS_ZOMBIE)) {
+        if (proc) {
+            process_exit(proc->exit_code ? proc->exit_code : 128);
+        }
+        return true;
+    }
+    return false;
+}
+
 void sched_block_current_thread(void) {
     thread_t *curr = sched_get_current_thread();
     if (!curr)
         return;
     process_t *proc = curr->process;
-    if (curr->state == THREAD_ZOMBIE || (proc && proc->status == PROCESS_ZOMBIE)) {
-        if (proc) {
-            process_exit(proc->exit_code ? proc->exit_code : 128);
-        }
+    if (sched_handle_zombie_or_exit(curr, proc))
         return;
-    }
     uint64_t flags;
     spinlock_acquire_irqsave(&g_sched_lock, &flags);
     if (curr->state == THREAD_ZOMBIE || (proc && proc->status == PROCESS_ZOMBIE)) {
@@ -127,14 +155,73 @@ void sched_block_current_thread(void) {
         }
         return;
     }
+    list_remove(&curr->sched_node);
     curr->state = THREAD_BLOCKED;
-    spinlock_release_irqrestore(&g_sched_lock, flags);
-    sched_yield();
+    sched_yield_locked(flags);
+    sched_handle_zombie_or_exit(curr, proc);
+}
+
+void sched_block_on_waitq(volatile bool *woken_flag) {
+    thread_t *curr = sched_get_current_thread();
+    if (!curr)
+        return;
+    process_t *proc = curr->process;
+    if (sched_handle_zombie_or_exit(curr, proc))
+        return;
+    uint64_t flags;
+    spinlock_acquire_irqsave(&g_sched_lock, &flags);
     if (curr->state == THREAD_ZOMBIE || (proc && proc->status == PROCESS_ZOMBIE)) {
+        spinlock_release_irqrestore(&g_sched_lock, flags);
         if (proc) {
             process_exit(proc->exit_code ? proc->exit_code : 128);
         }
+        return;
     }
+    if (woken_flag && __atomic_load_n(woken_flag, __ATOMIC_ACQUIRE)) {
+        spinlock_release_irqrestore(&g_sched_lock, flags);
+        return;
+    }
+    list_remove(&curr->sched_node);
+    curr->state = THREAD_BLOCKED;
+    sched_yield_locked(flags);
+    sched_handle_zombie_or_exit(curr, proc);
+}
+
+bool sched_block_on_futex(volatile uintptr_t *uaddr_slot, uint64_t wakeup_tick, bool timed) {
+    thread_t *curr = sched_get_current_thread();
+    if (!curr)
+        return false;
+    process_t *proc = curr->process;
+    if (sched_handle_zombie_or_exit(curr, proc))
+        return false;
+    uint64_t flags;
+    spinlock_acquire_irqsave(&g_sched_lock, &flags);
+    if (curr->state == THREAD_ZOMBIE || (proc && proc->status == PROCESS_ZOMBIE)) {
+        spinlock_release_irqrestore(&g_sched_lock, flags);
+        if (proc) {
+            process_exit(proc->exit_code ? proc->exit_code : 128);
+        }
+        return false;
+    }
+    if (!uaddr_slot || __atomic_load_n(uaddr_slot, __ATOMIC_ACQUIRE) == 0) {
+        spinlock_release_irqrestore(&g_sched_lock, flags);
+        return false;
+    }
+    if (timed && pit_get_ticks() >= wakeup_tick) {
+        spinlock_release_irqrestore(&g_sched_lock, flags);
+        return false;
+    }
+    list_remove(&curr->sched_node);
+    if (timed) {
+        curr->state = THREAD_SLEEPING;
+        curr->sleep_until_tick = wakeup_tick;
+        list_add_tail(&g_sleeping_queue, &curr->sched_node);
+    } else {
+        curr->state = THREAD_BLOCKED;
+    }
+    sched_yield_locked(flags);
+    sched_handle_zombie_or_exit(curr, proc);
+    return true;
 }
 
 void sched_unblock_thread(thread_t *thread) {
@@ -142,19 +229,19 @@ void sched_unblock_thread(thread_t *thread) {
         return;
     uint64_t flags;
     spinlock_acquire_irqsave(&g_sched_lock, &flags);
-    if (thread->state == THREAD_BLOCKED) {
+    if (thread->state == THREAD_BLOCKED || thread->state == THREAD_SLEEPING) {
+        list_remove(&thread->sched_node);
         thread->state = THREAD_READY;
         list_add_tail(&g_ready_queue, &thread->sched_node);
     }
     spinlock_release_irqrestore(&g_sched_lock, flags);
 }
 
-void sched_yield(void) {
-    if (!g_sched_started)
+static void sched_yield_locked(uint64_t flags) {
+    if (!g_sched_started) {
+        spinlock_release_irqrestore(&g_sched_lock, flags);
         return;
-
-    uint64_t flags;
-    spinlock_acquire_irqsave(&g_sched_lock, &flags);
+    }
 
     cpu_t *cpu = smp_current_cpu();
     uint32_t cpu_id = cpu ? cpu->cpu_id : 0;
@@ -162,6 +249,7 @@ void sched_yield(void) {
 
     thread_t *prev = cpu ? cpu->current_thread : NULL;
     if (prev && prev != idle && prev->state == THREAD_RUNNING) {
+        list_remove(&prev->sched_node);
         prev->state = THREAD_READY;
         list_add_tail(&g_ready_queue, &prev->sched_node);
     }
@@ -223,6 +311,8 @@ void sched_yield(void) {
         vmm_switch_address_space(next->process->pagemap);
     }
 
+    rseq_update_cpu(next, cpu_id);
+
     if (prev != next) {
         /* CPU Time Accounting */
         uint64_t now_ns = rtc_get_monotonic_ns();
@@ -252,20 +342,25 @@ void sched_yield(void) {
     }
 }
 
+void sched_yield(void) {
+    if (!g_sched_started)
+        return;
+
+    uint64_t flags;
+    spinlock_acquire_irqsave(&g_sched_lock, &flags);
+    sched_yield_locked(flags);
+}
+
 void thread_sleep(uint32_t ms) {
     thread_t *curr = sched_get_current_thread();
     if (!curr)
         return;
 
     process_t *proc = curr->process;
-    if (curr->state == THREAD_ZOMBIE || (proc && proc->status == PROCESS_ZOMBIE)) {
-        if (proc) {
-            process_exit(proc->exit_code ? proc->exit_code : 128);
-        }
+    if (sched_handle_zombie_or_exit(curr, proc))
         return;
-    }
 
-    if (proc && (proc->pending_signals & ~proc->blocked_signals)) {
+    if (proc && ((proc->pending_signals | curr->thread_pending) & ~curr->blocked_signals)) {
         return;
     }
 
@@ -288,18 +383,13 @@ void thread_sleep(uint32_t ms) {
         }
         return;
     }
+    list_remove(&curr->sched_node);
     curr->state = THREAD_SLEEPING;
     curr->sleep_until_tick = pit_get_ticks() + ticks_to_sleep;
     list_add_tail(&g_sleeping_queue, &curr->sched_node);
-    spinlock_release_irqrestore(&g_sched_lock, flags);
+    sched_yield_locked(flags);
 
-    sched_yield();
-
-    if (curr->state == THREAD_ZOMBIE || (proc && proc->status == PROCESS_ZOMBIE)) {
-        if (proc) {
-            process_exit(proc->exit_code ? proc->exit_code : 128);
-        }
-    }
+    sched_handle_zombie_or_exit(curr, proc);
 }
 
 static volatile uint64_t g_stat_user_ticks = 0;

@@ -225,7 +225,8 @@ int64_t sys_inotify_init1(int flags) {
     }
 
     fdesc->node = node;
-    fdesc->flags = O_RDONLY;
+    /* Linux creates inotify descriptors O_RDWR (see timerfd note). */
+    fdesc->flags = O_RDWR;
     if (flags & IN_NONBLOCK)
         fdesc->flags |= 0x0800; /* O_NONBLOCK */
     fdesc->refcount = 1;

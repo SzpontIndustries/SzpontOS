@@ -5,9 +5,8 @@
 # Git submodules guard (single-shot fix): cryptic "No rule to make target
 # `third_party/*/configure'" meant empty submodule dirs. Fail fast with a
 # clear hint instead of requiring repeated `make` to discover it.
-# NOTE: plain `git submodule update` does NOT repair an EMPTIED worktree
-# (files wiped, HEAD==pin): it compares SHAs only and skips. Such damage
-# needs `git -C <dir> reset --hard HEAD`. The check below detects it.
+# An empty worktree needs inspection before recovery, since it may contain
+# intentional local changes.
 # ==============================================================================
 .PHONY: submodules-check
 submodules-check:
@@ -19,20 +18,15 @@ submodules-check:
 	done; \
 	if [ -n "$$missing" ]; then \
 		echo "  [ERR] Puste worktree submodulow (zwykly submodule update tego NIE naprawi):$$missing"; \
-		echo "        Napraw: for d in$$missing; do git -C \$$d reset --hard HEAD; done"; \
+		echo "        Sprawdz stan podmodulow i odtworz brakujace pliki po zabezpieczeniu lokalnych zmian."; \
 		exit 1; \
 	fi
 
-# ncurses configure generator (single-shot fix): previously no rule existed to
-# create `third_party/ncurses/configure`, so clean builds failed with
-# "No rule to make target" and only succeeded after manual autoreconf.
-# The guard below also self-heals an emptied worktree (missing configure.ac),
-# which plain `git submodule update` does NOT repair (it only checks SHAs).
+# Generate ncurses configure when the source is present. Never reset a
+# submodule here: its worktree can contain changes that belong to the user.
 third_party/ncurses/configure:
 	@echo "  [PRECONF-NCURSES] Generowanie configure dla GNU Ncurses..."
 	@if [ ! -f third_party/ncurses/configure.ac ]; then \
-		echo "  [SUBMODULE] Odtwarzanie worktree third_party/ncurses..."; \
-		git -C third_party/ncurses reset --hard HEAD 2>/dev/null || git submodule update --init -- third_party/ncurses; \
 		test -f third_party/ncurses/configure.ac || { echo "  [ERR] Brak third_party/ncurses/configure.ac - uruchom: git submodule update --init --recursive"; exit 1; }; \
 	fi
 	@cd third_party/ncurses && autoreconf -fi
@@ -550,7 +544,6 @@ $(ROOTFS_DIR)/usr/lib/libX11.so: $(BUILD_DIR)/third_party/libX11/Makefile
 	$(LD) -shared -soname libX11.so.6 -o $(abspath $(SYSROOT_DIR))/usr/lib/libX11.so.6 --whole-archive src/.libs/libX11.a --no-whole-archive -L$(abspath $(SYSROOT_DIR))/usr/lib -lxcb -lXau -lXdmcp -lc && \
 	ln -sf libX11.so.6 $(abspath $(SYSROOT_DIR))/usr/lib/libX11.so && \
 	cp -f $(abspath $(SYSROOT_DIR))/usr/lib/libX11.so.6 $(abspath $(ROOTFS_DIR))/usr/lib/libX11.so.6 && \
-	ln -sf libX11.so.6 $(abspath $(ROOTFS_DIR))/usr/lib/libX11.so && \
 	if [ -f src/x11_xcb.o ]; then \
 		$(LD) -shared -soname libX11-xcb.so.1 -o $(abspath $(SYSROOT_DIR))/usr/lib/libX11-xcb.so.1 src/x11_xcb.o -L$(abspath $(SYSROOT_DIR))/usr/lib -lX11 -lxcb -lc 2>/dev/null || true; \
 		ln -sf libX11-xcb.so.1 $(abspath $(SYSROOT_DIR))/usr/lib/libX11-xcb.so 2>/dev/null || true; \
@@ -558,16 +551,15 @@ $(ROOTFS_DIR)/usr/lib/libX11.so: $(BUILD_DIR)/third_party/libX11/Makefile
 		ln -sf libX11-xcb.so.1 $(abspath $(ROOTFS_DIR))/usr/lib/libX11-xcb.so 2>/dev/null || true; \
 	fi && \
 	cp -r $(abspath third_party/libX11/include/X11)/* $(abspath $(SYSROOT_DIR))/usr/include/X11/ && \
-	cp -f $(abspath $(BUILD_DIR)/third_party/libX11)/include/X11/XlibConf.h $(abspath $(SYSROOT_DIR))/usr/include/X11/ 2>/dev/null || true && \
-	cp -f $(abspath $(BUILD_DIR)/third_party/libX11)/*.pc $(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig/ 2>/dev/null || true && \
-	$(MAKE) -C nls && \
+	( cp -f $(abspath $(BUILD_DIR)/third_party/libX11)/include/X11/XlibConf.h $(abspath $(SYSROOT_DIR))/usr/include/X11/ 2>/dev/null || true ) && \
+	( cp -f $(abspath $(BUILD_DIR)/third_party/libX11)/*.pc $(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig/ 2>/dev/null || true ) && \
+	LC_ALL=C $(MAKE) -C nls && \
 	mkdir -p $(abspath $(SYSROOT_DIR))/usr/share/X11/locale/C $(abspath $(ROOTFS_DIR))/usr/share/X11/locale/C && \
-	cp -f nls/C/XLC_LOCALE $(abspath $(SYSROOT_DIR))/usr/share/X11/locale/C/ 2>/dev/null || true && \
-	cp -f nls/C/XLC_LOCALE $(abspath $(ROOTFS_DIR))/usr/share/X11/locale/C/ 2>/dev/null || true && \
-	cp -f nls/locale.dir $(abspath $(SYSROOT_DIR))/usr/share/X11/locale/ 2>/dev/null || true && \
-	cp -f nls/locale.dir $(abspath $(ROOTFS_DIR))/usr/share/X11/locale/ 2>/dev/null || true && \
-	cp -f nls/locale.alias $(abspath $(SYSROOT_DIR))/usr/share/X11/locale/ 2>/dev/null || true && \
-	cp -f nls/locale.alias $(abspath $(ROOTFS_DIR))/usr/share/X11/locale/ 2>/dev/null || true
+	cp -f nls/C/XLC_LOCALE $(abspath $(SYSROOT_DIR))/usr/share/X11/locale/C/ && \
+	cp -f nls/C/XLC_LOCALE $(abspath $(ROOTFS_DIR))/usr/share/X11/locale/C/ && \
+	cp -f nls/locale.dir nls/locale.alias $(abspath $(SYSROOT_DIR))/usr/share/X11/locale/ && \
+	cp -f nls/locale.dir nls/locale.alias $(abspath $(ROOTFS_DIR))/usr/share/X11/locale/ && \
+	ln -sf libX11.so.6 $(abspath $(ROOTFS_DIR))/usr/lib/libX11.so
 
 
 # ==============================================================================
@@ -1694,92 +1686,59 @@ $(ROOTFS_DIR)/usr/lib/libepoxy.so: $(BUILD_DIR)/szpontos_cross.ini | $(ROOTFS_DI
 $(ROOTFS_DIR)/lib/libepoxy.so: $(ROOTFS_DIR)/usr/lib/libepoxy.so
 	@ln -sf /usr/lib/libepoxy.so $@ 2>/dev/null || true
 
+XSERVER_MESON_OPTS := \
+	--cross-file $(BUILD_DIR)/szpontos_cross.ini \
+	-Dprefix=/usr \
+	-Dxorg=true \
+	-Dxephyr=false \
+	-Dxfbdev=false \
+	-Dxnest=false \
+	-Dxvfb=false \
+	-Dxwin=false \
+	-Dxquartz=false \
+	-Dglamor=true \
+	-Dglx=true \
+	-Ddri1=false \
+	-Ddri2=true \
+	-Ddri3=true \
+	-Dgbm=true \
+	-Dudev=false \
+	-Dudev_kms=false \
+	-Dhal=false \
+	-Dsystemd_logind=false \
+	-Dseatd_libseat=false \
+	-Dpciaccess=true \
+	-Dint10=false \
+	-Dvgahw=false \
+	-Dsuid_wrapper=false \
+	-Dlibunwind=false \
+	-Dtests=false \
+	-Ddocs=false \
+	-Ddevel-docs=false \
+	-Ddrm=true \
+	-Dmitshm=true \
+	-Dsha1=libc \
+	-Dlinux_acpi=false \
+	-Dlinux_apm=false \
+	-Db_lundef=false \
+	-Dxkb_dir=/usr/share/X11/xkb \
+	-Dxkb_bin_dir=/usr/bin \
+	-Dxkb_output_dir=/var/lib/xkb
+
 $(XSERVER_BUILD_DIR)/build.ninja: $(BUILD_DIR)/szpontos_cross.ini | $(ROOTFS_DIR)/usr/lib/libdrm.so $(ROOTFS_DIR)/usr/lib/libgbm.so $(ROOTFS_DIR)/usr/lib/libpixman-1.so $(ROOTFS_DIR)/usr/lib/libxkbfile.so $(ROOTFS_DIR)/usr/lib/libXfont2.so $(ROOTFS_DIR)/usr/lib/libfontenc.so $(ROOTFS_DIR)/usr/lib/libpciaccess.so $(ROOTFS_DIR)/usr/lib/libGL.so $(ROOTFS_DIR)/usr/lib/libepoxy.so $(SYSROOT_STAMP)
 # NOTE: -Dpciaccess=true is REQUIRED (was false): the modesetting driver calls
 # ms_DRICreatePCIBusID() unconditionally but defines it only under
 # XSERVER_LIBPCIACCESS, so pciaccess=false breaks the build with an implicit
 # declaration error. Our libpciaccess port satisfies the dependency.
 	@mkdir -p $(XSERVER_BUILD_DIR)
-	@mkdir -p $(XSERVER_BUILD_DIR)
 	@echo "  [CONF-XORG] Konfiguracja X.Org Server (meson cross-compile)..."
-	@PKG_CONFIG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig" \
-	meson setup $(XSERVER_BUILD_DIR) third_party/xserver \
-	    --cross-file $(BUILD_DIR)/szpontos_cross.ini \
-	    -Dprefix=/usr \
-	    -Dxorg=true \
-	    -Dxephyr=false \
-	    -Dxfbdev=false \
-	    -Dxnest=false \
-	    -Dxvfb=false \
-	    -Dxwin=false \
-	    -Dxquartz=false \
-	    -Dglamor=true \
-	    -Dglx=true \
-	    -Ddri1=false \
-	    -Ddri2=true \
-	    -Ddri3=true \
-	    -Dgbm=true \
-	    -Dudev=false \
-	    -Dudev_kms=false \
-	    -Dhal=false \
-	    -Dsystemd_logind=false \
-    -Dseatd_libseat=false \
-    -Dpciaccess=true \
-    -Dint10=false \
-	    -Dvgahw=false \
-	    -Dsuid_wrapper=false \
-	    -Dlibunwind=false \
-	    -Dtests=false \
-	    -Ddocs=false \
-	    -Ddevel-docs=false \
-	    -Ddrm=true \
-	    -Dmitshm=true \
-	    -Dsha1=libc \
-	    -Dlinux_acpi=false \
-	    -Dlinux_apm=false \
-	    -Db_lundef=false \
-	    -Dxkb_dir=/usr/share/X11/xkb \
-	    -Dxkb_bin_dir=/usr/bin \
-	    -Dxkb_output_dir=/var/lib/xkb --reconfigure 2>/dev/null || \
-	PKG_CONFIG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig" \
-	meson setup $(XSERVER_BUILD_DIR) third_party/xserver \
-	    --cross-file $(BUILD_DIR)/szpontos_cross.ini \
-	    -Dprefix=/usr \
-	    -Dxorg=true \
-	    -Dxephyr=false \
-	    -Dxfbdev=false \
-	    -Dxnest=false \
-	    -Dxvfb=false \
-	    -Dxwin=false \
-	    -Dxquartz=false \
-	    -Dglamor=true \
-	    -Dglx=true \
-	    -Ddri1=false \
-	    -Ddri2=true \
-	    -Ddri3=true \
-	    -Dgbm=true \
-	    -Dudev=false \
-	    -Dudev_kms=false \
-	    -Dhal=false \
-	    -Dsystemd_logind=false \
-    -Dseatd_libseat=false \
-    -Dpciaccess=true \
-    -Dint10=false \
-	    -Dvgahw=false \
-	    -Dsuid_wrapper=false \
-	    -Dlibunwind=false \
-	    -Dtests=false \
-	    -Ddocs=false \
-	    -Ddevel-docs=false \
-	    -Ddrm=true \
-	    -Dmitshm=true \
-	    -Dsha1=libc \
-	    -Dlinux_acpi=false \
-	    -Dlinux_apm=false \
-	    -Db_lundef=false \
-	    -Dxkb_dir=/usr/share/X11/xkb \
-	    -Dxkb_bin_dir=/usr/bin \
-	    -Dxkb_output_dir=/var/lib/xkb
+	@PKG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig"; \
+	if [ -f $(XSERVER_BUILD_DIR)/build.ninja ]; then \
+		PKG_CONFIG_PATH="$$PKG_PATH" meson setup $(XSERVER_BUILD_DIR) third_party/xserver $(XSERVER_MESON_OPTS) --reconfigure || \
+		PKG_CONFIG_PATH="$$PKG_PATH" meson setup $(XSERVER_BUILD_DIR) third_party/xserver $(XSERVER_MESON_OPTS) --wipe; \
+	else \
+		PKG_CONFIG_PATH="$$PKG_PATH" meson setup $(XSERVER_BUILD_DIR) third_party/xserver $(XSERVER_MESON_OPTS); \
+	fi
 	@if [ -f $(XSERVER_BUILD_DIR)/dix-config.h ]; then \
 		sed -i.bak -e 's|#define DRI_DRIVER_PATH ".*"|#define DRI_DRIVER_PATH "/usr/lib/dri:/lib/dri"|g' $(XSERVER_BUILD_DIR)/dix-config.h && rm -f $(XSERVER_BUILD_DIR)/dix-config.h.bak; \
 	fi
@@ -1864,65 +1823,57 @@ $(ROOTFS_DIR)/usr/lib/xorg/modules/input/kbd_drv.so: $(KBD_OBJS) | $(ROOTFS_DIR)
 # ==============================================================================
 MESA_BUILD_DIR := $(BUILD_DIR)/third_party/mesa
 MESA_CROSS_FILE := $(BUILD_DIR)/szpontos_cross.ini
+MESA_NATIVE_FILE := $(BUILD_DIR)/mesa-native.ini
+
+$(MESA_NATIVE_FILE): | $(BUILD_DIR)
+	@python=""; for candidate in python3 python3.15 python3.14 python3.13 python3.12 python3.11 python3.10 python3.9 python3.8; do \
+		if command -v $$candidate >/dev/null 2>&1 && $$candidate -c 'import mako, yaml, packaging' >/dev/null 2>&1; then python=$$(command -v $$candidate); break; fi; \
+	done; \
+	if [ -z "$$python" ]; then echo '  [ERR] Mesa wymaga Python 3 z pakietami Mako, PyYAML i packaging'; exit 1; fi; \
+	printf "[binaries]\npython3 = '%s'\npython = '%s'\n" "$$python" "$$python" > $@
+
+MESA_MESON_OPTS := \
+	--cross-file $(MESA_CROSS_FILE) \
+	--cross-file $(MESA_NATIVE_FILE) \
+	--native-file $(MESA_NATIVE_FILE) \
+	-Dprefix=/usr \
+	-Dgallium-drivers=crocus,virgl,softpipe \
+	-Dgallium-vdpau=disabled \
+	-Dgallium-va=disabled \
+	-Dgallium-xa=disabled \
+	-Dplatforms=x11 \
+	-Dglx=dri \
+	-Dglx-direct=true \
+	-Degl=enabled \
+	-Dgbm=enabled \
+	-Dgles1=disabled \
+	-Dgles2=enabled \
+	-Dshared-glapi=enabled \
+	-Dllvm=disabled \
+	-Dvalgrind=disabled \
+	-Dlibunwind=disabled \
+	-Dbuild-tests=false \
+	-Db_lundef=false \
+	-Dshader-cache=disabled \
+	-D'vulkan-drivers=[]' \
+	-D'vulkan-layers=[]' \
+	-Dcpp_rtti=false
 
 # NOTE (single-shot fix): mesa's meson setup probes x11/xext/xfixes via
 # pkg-config at CONFIGURE time. Those .pc files only exist after libX11 /
 # libXext / libXfixes install, so they must be normal (ordering + rebuild)
 # deps here - not just the previous subset. Missing dep showed up as
 # `Dependency "xfixes" not found` only after libdrm+fastfetch got fixed.
-$(MESA_BUILD_DIR)/build.ninja: $(MESA_CROSS_FILE) $(ROOTFS_DIR)/usr/lib/libX11.so $(ROOTFS_DIR)/usr/lib/libXext.so $(ROOTFS_DIR)/usr/lib/libXfixes.so $(ROOTFS_DIR)/usr/lib/libXrandr.so | $(ROOTFS_DIR)/usr/lib/libdrm.so $(ROOTFS_DIR)/usr/lib/libxshmfence.so $(ROOTFS_DIR)/usr/lib/libxcb.so $(ROOTFS_DIR)/usr/lib/libXxf86vm.so $(LIBSTDCXX_SO) $(SYSROOT_STAMP)
+$(MESA_BUILD_DIR)/build.ninja: $(MESA_CROSS_FILE) $(MESA_NATIVE_FILE) $(ROOTFS_DIR)/usr/lib/libX11.so $(ROOTFS_DIR)/usr/lib/libXext.so $(ROOTFS_DIR)/usr/lib/libXfixes.so $(ROOTFS_DIR)/usr/lib/libXrandr.so | $(ROOTFS_DIR)/usr/lib/libdrm.so $(ROOTFS_DIR)/usr/lib/libxshmfence.so $(ROOTFS_DIR)/usr/lib/libxcb.so $(ROOTFS_DIR)/usr/lib/libXxf86vm.so $(LIBSTDCXX_SO) $(SYSROOT_STAMP)
 	@mkdir -p $(MESA_BUILD_DIR)
 	@echo "  [CONF-MESA] Konfiguracja Mesa 3D (meson cross-compile)..."
-	@PKG_CONFIG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig" \
-	meson setup $(MESA_BUILD_DIR) third_party/mesa \
-	    --cross-file $(MESA_CROSS_FILE) \
-	    -Dprefix=/usr \
-	    -Dgallium-drivers=crocus,virgl,softpipe \
-	    -Dgallium-vdpau=disabled \
-	    -Dgallium-va=disabled \
-	    -Dgallium-xa=disabled \
-	    -Dplatforms=x11 \
-	    -Dglx=dri \
-	    -Dglx-direct=true \
-	    -Degl=enabled \
-	    -Dgbm=enabled \
-	    -Dgles1=disabled \
-	    -Dgles2=enabled \
-	    -Dshared-glapi=enabled \
-	    -Dllvm=disabled \
-	    -Dvalgrind=disabled \
-	    -Dlibunwind=disabled \
-	    -Dbuild-tests=false \
-	    -Db_lundef=false \
-	    -Dshader-cache=disabled \
-	    -D'vulkan-drivers=[]' \
-	    -D'vulkan-layers=[]' \
-	    -Dcpp_rtti=false --reconfigure 2>/dev/null || \
-	PKG_CONFIG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig" \
-	meson setup $(MESA_BUILD_DIR) third_party/mesa \
-	    --cross-file $(MESA_CROSS_FILE) \
-	    -Dprefix=/usr \
-	    -Dgallium-drivers=crocus,virgl,softpipe \
-	    -Dgallium-vdpau=disabled \
-	    -Dgallium-va=disabled \
-	    -Dgallium-xa=disabled \
-	    -Dplatforms=x11 \
-	    -Dglx=dri \
-	    -Dglx-direct=true \
-	    -Degl=enabled \
-	    -Dgbm=enabled \
-	    -Dgles1=disabled \
-	    -Dgles2=enabled \
-	    -Dshared-glapi=enabled \
-	    -Dllvm=disabled \
-	    -Dvalgrind=disabled \
-	    -Dlibunwind=disabled \
-	    -Dbuild-tests=false \
-	    -Db_lundef=false \
-	    -Dshader-cache=disabled \
-	    -D'vulkan-drivers=[]' \
-	    -D'vulkan-layers=[]' \
-	    -Dcpp_rtti=false
+	@PKG_PATH="$(abspath $(SYSROOT_DIR))/usr/lib/pkgconfig:$(abspath $(SYSROOT_DIR))/usr/share/pkgconfig"; \
+	if [ -f $(MESA_BUILD_DIR)/build.ninja ]; then \
+		PKG_CONFIG_PATH="$$PKG_PATH" meson setup $(MESA_BUILD_DIR) third_party/mesa $(MESA_MESON_OPTS) --reconfigure || \
+		PKG_CONFIG_PATH="$$PKG_PATH" meson setup $(MESA_BUILD_DIR) third_party/mesa $(MESA_MESON_OPTS) --wipe; \
+	else \
+		PKG_CONFIG_PATH="$$PKG_PATH" meson setup $(MESA_BUILD_DIR) third_party/mesa $(MESA_MESON_OPTS); \
+	fi
 
 $(MESA_BUILD_DIR)/src/egl/libEGL.so.1.0.0: $(MESA_BUILD_DIR)/build.ninja
 	@echo "  [NINJA-MESA] Kompilacja Mesa 3D (ninja -j$(JOBS))..."
@@ -1949,8 +1900,12 @@ $(ROOTFS_DIR)/usr/lib/libEGL.so: $(MESA_BUILD_DIR)/src/egl/libEGL.so.1.0.0 | $(R
 	@ln -sf libgbm.so.1 $(ROOTFS_DIR)/usr/lib/libgbm.so 2>/dev/null || true
 	@ln -sf libgbm.so.1 $(SYSROOT_DIR)/usr/lib/libgbm.so 2>/dev/null || true
 	@mkdir -p $(ROOTFS_DIR)/usr/lib/gbm $(SYSROOT_DIR)/usr/lib/gbm
-	@cp -a $(MESA_BUILD_DIR)/src/gbm/backends/dri/dri_gbm.so $(ROOTFS_DIR)/usr/lib/gbm/ 2>/dev/null || cp -a $(SYSROOT_DIR)/usr/lib/gbm/* $(ROOTFS_DIR)/usr/lib/gbm/ 2>/dev/null || true
-	@cp -a $(ROOTFS_DIR)/usr/lib/gbm/* $(SYSROOT_DIR)/usr/lib/gbm/ 2>/dev/null || true
+	@if [ -f $(MESA_BUILD_DIR)/src/gbm/backends/dri/dri_gbm.so ]; then \
+		cp -a $(MESA_BUILD_DIR)/src/gbm/backends/dri/dri_gbm.so $(SYSROOT_DIR)/usr/lib/gbm/ && \
+		cp -a $(MESA_BUILD_DIR)/src/gbm/backends/dri/dri_gbm.so $(ROOTFS_DIR)/usr/lib/gbm/; \
+	elif [ -d $(SYSROOT_DIR)/usr/lib/gbm ] && [ "$$(ls -A $(SYSROOT_DIR)/usr/lib/gbm 2>/dev/null)" ]; then \
+		cp -a $(SYSROOT_DIR)/usr/lib/gbm/* $(ROOTFS_DIR)/usr/lib/gbm/; \
+	fi
 	@cp -a $(SYSROOT_DIR)/usr/lib/libexpat* $(ROOTFS_DIR)/usr/lib/
 	@cp -a $(SYSROOT_DIR)/usr/lib/dri/* $(ROOTFS_DIR)/usr/lib/dri/
 	@ln -sf kms_swrast_dri.so $(ROOTFS_DIR)/usr/lib/dri/szpont-drm_dri.so

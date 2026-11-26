@@ -94,6 +94,22 @@ static bool do_copy(pagemap_t *pagemap, void *kernel_buf, uintptr_t user_addr,
     return true;
 }
 
+bool copy_from_user_pagemap(pagemap_t *pagemap, void *dst, uintptr_t user_src, size_t len)
+{
+    if (!pagemap)
+        return false;
+
+    return do_copy(pagemap, dst, user_src, len, false);
+}
+
+bool copy_to_user_pagemap(pagemap_t *pagemap, uintptr_t user_dst, const void *src, size_t len)
+{
+    if (!pagemap)
+        return false;
+
+    return do_copy(pagemap, (void *)src, user_dst, len, true);
+}
+
 bool copy_from_user(void *dst, uintptr_t user_src, size_t len)
 {
     process_t *proc = sched_get_current_process();

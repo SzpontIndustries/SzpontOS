@@ -53,7 +53,7 @@ kernel: $(KERNEL_ELF)
 # (libc/Makefile builds LIBC_SO then copies to sysroot). Previously two
 # concurrent recipes (`libc` + `sysroot`) raced on the same
 # BUILD/libc/*.o files. Now LIBC_SO is just an alias ordered after sysroot.
-$(LIBC_SO): $(SYSROOT_STAMP)
+$(LIBC_SO) $(LIBM_SO) $(LIBC_A) $(LIBM_A) $(LIBDL_A) $(CRT0_O) $(CRTI_O) $(CRTN_O): | $(SYSROOT_STAMP)
 	@test -f $@ || { echo "  [ERR] $@ missing after sysroot build"; exit 1; }
 
 libc: $(SYSROOT_STAMP)
@@ -77,7 +77,11 @@ $(MODULES_STAMP): $(MODULES_SRCS) $(SYSROOT_STAMP) $(ROOT_DIR)/modules/Makefile 
 
 modules: $(MODULES_STAMP)
 
-USERLAND_SRCS := $(shell find $(ROOT_DIR)/userland -type f 2>/dev/null)
+USERLAND_SRCS := $(shell find $(ROOT_DIR)/userland -type f 2>/dev/null) $(ROOT_DIR)/scripts/tests/corecheck.c
+.PHONY: missing-user-tests
+ifneq ($(filter-out $(wildcard $(USER_TEST_PROGS)),$(USER_TEST_PROGS)),)
+$(USERLAND_STAMP): missing-user-tests
+endif
 # Single owner of USERLAND_STAMP is top-level (userland/Makefile must NOT touch
 # it). Chained AFTER third-party so X11/mesa/openssl headers + .so files exist
 # before any userland compile starts. This was the main "repeat make" cause.

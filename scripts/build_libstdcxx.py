@@ -661,7 +661,8 @@ def main():
     need_relink = bool(tasks) or not os.path.exists(so_target) or not os.path.exists(rootfs_so_target) or not os.path.exists(a_target)
     if not need_relink:
         so_mtime = os.path.getmtime(so_target)
-        if any(os.path.getmtime(o) > so_mtime for o in link_objs):
+        rootfs_mtime = os.path.getmtime(rootfs_so_target)
+        if os.path.getmtime(__file__) > min(so_mtime, rootfs_mtime) or any(os.path.getmtime(o) > so_mtime for o in link_objs):
             need_relink = True
 
     if need_relink:

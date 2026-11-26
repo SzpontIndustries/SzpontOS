@@ -37,6 +37,32 @@ int futex_wait(uintptr_t uaddr, int val, const struct timespec *timeout) {
     if (!proc || !curr || uaddr == 0)
         return -1;
 
+    /* Copy and validate timeout before acquiring bucket lock */
+    bool has_timeout = false;
+    uint64_t expire_ticks = 0;
+    if (timeout) {
+        struct timespec ktimeout;
+        if (!copy_from_user(&ktimeout, (uintptr_t)timeout, sizeof(struct timespec))) {
+            return -14; /* -EFAULT */
+        }
+        if (ktimeout.tv_sec < 0 || ktimeout.tv_nsec < 0 || ktimeout.tv_nsec >= 1000000000L) {
+            return -22; /* -EINVAL */
+        }
+        uint64_t wait_ms = (uint64_t)ktimeout.tv_sec * 1000 + (uint64_t)(ktimeout.tv_nsec / 1000000);
+        if (wait_ms == 0 && ktimeout.tv_nsec > 0)
+            wait_ms = 1;
+
+        uint64_t start_ticks = pit_get_ticks();
+        uint32_t freq = pit_get_frequency();
+        if (freq == 0)
+            freq = 1000;
+        uint64_t duration_ticks = (wait_ms * freq) / 1000;
+        if (duration_ticks == 0 && wait_ms > 0)
+            duration_ticks = 1;
+        expire_ticks = start_ticks + duration_ticks;
+        has_timeout = true;
+    }
+
     /* Verify that uaddr is mapped and accessible in user space */
     if (!vmm_virt_to_phys(proc->pagemap, uaddr)) {
         return -14; /* -EFAULT */
@@ -45,76 +71,82 @@ int futex_wait(uintptr_t uaddr, int val, const struct timespec *timeout) {
     uint32_t bucket_idx = FUTEX_HASH(uaddr);
     futex_bucket_t *bucket = &g_futex_buckets[bucket_idx];
 
-    spinlock_acquire(&bucket->lock);
+    uint64_t bflags;
+    spinlock_acquire_irqsave(&bucket->lock, &bflags);
 
     /* Atomic check: read current value at uaddr using usercopy */
     int current_val = 0;
     if (!copy_from_user(&current_val, uaddr, sizeof(int))) {
-        spinlock_release(&bucket->lock);
+        spinlock_release_irqrestore(&bucket->lock, bflags);
         return -14; /* -EFAULT */
     }
 
     if (current_val != val) {
-        spinlock_release(&bucket->lock);
+        spinlock_release_irqrestore(&bucket->lock, bflags);
         return -11; /* -EAGAIN */
     }
 
-    /* Block current thread and add to futex wait queue */
-    curr->state = THREAD_BLOCKED;
-    curr->futex_uaddr = uaddr;
+    /* Register waiter under bucket->lock; state transition happens atomically
+     * under g_sched_lock in sched_block_on_futex(). */
+    list_remove(&curr->futex_node);
     curr->futex_proc = proc;
+    __atomic_store_n(&curr->futex_uaddr, uaddr, __ATOMIC_RELEASE);
     list_add_tail(&bucket->waiters, &curr->futex_node);
 
-    spinlock_release(&bucket->lock);
+    spinlock_release_irqrestore(&bucket->lock, bflags);
 
-    if (timeout) {
-        struct timespec ktimeout;
-        if (!copy_from_user(&ktimeout, (uintptr_t)timeout, sizeof(struct timespec))) {
-            spinlock_acquire(&bucket->lock);
-            if (curr->futex_uaddr != 0) {
-                list_remove(&curr->futex_node);
-                curr->futex_uaddr = 0;
-                curr->futex_proc = NULL;
-                curr->state = THREAD_READY;
-            }
-            spinlock_release(&bucket->lock);
-            return -14; /* -EFAULT */
-        }
-
-        uint64_t wait_ms = (uint64_t)ktimeout.tv_sec * 1000 + (uint64_t)(ktimeout.tv_nsec / 1000000);
-        if (wait_ms == 0 && ktimeout.tv_nsec > 0)
-            wait_ms = 1;
-
-        uint64_t start_ticks = pit_get_ticks();
-        uint32_t freq = pit_get_frequency();
-        if (freq == 0) freq = 1000;
-        uint64_t duration_ticks = (wait_ms * freq) / 1000;
-        if (duration_ticks == 0 && wait_ms > 0) duration_ticks = 1;
-        uint64_t expire_ticks = start_ticks + duration_ticks;
-
-        while (curr->futex_uaddr != 0) {
+    while (__atomic_load_n(&curr->futex_uaddr, __ATOMIC_ACQUIRE) != 0) {
+        if (has_timeout) {
             if (pit_get_ticks() >= expire_ticks) {
-                /* Expiration check */
-                spinlock_acquire(&bucket->lock);
-                if (curr->futex_uaddr != 0) {
+                spinlock_acquire_irqsave(&bucket->lock, &bflags);
+                if (__atomic_load_n(&curr->futex_uaddr, __ATOMIC_ACQUIRE) != 0) {
                     list_remove(&curr->futex_node);
-                    curr->futex_uaddr = 0;
+                    __atomic_store_n(&curr->futex_uaddr, 0, __ATOMIC_RELEASE);
                     curr->futex_proc = NULL;
-                    curr->state = THREAD_READY;
-                    spinlock_release(&bucket->lock);
+                    spinlock_release_irqrestore(&bucket->lock, bflags);
                     return -110; /* -ETIMEDOUT */
                 }
-                spinlock_release(&bucket->lock);
+                spinlock_release_irqrestore(&bucket->lock, bflags);
                 break;
             }
-            thread_sleep(1);
+            sched_block_on_futex(&curr->futex_uaddr, expire_ticks, true);
+        } else {
+            sched_block_on_futex(&curr->futex_uaddr, 0, false);
         }
-    } else {
-        /* Yield CPU until awakened by futex_wake */
-        sched_yield();
     }
 
     return 0;
+}
+
+int futex_wake_proc(process_t *proc, uintptr_t uaddr, int count) {
+    if (uaddr == 0 || count <= 0 || !proc)
+        return 0;
+
+    uint32_t bucket_idx = FUTEX_HASH(uaddr);
+    futex_bucket_t *bucket = &g_futex_buckets[bucket_idx];
+
+    uint64_t bflags;
+    spinlock_acquire_irqsave(&bucket->lock, &bflags);
+
+    int woken = 0;
+    list_node_t *pos, *n;
+    list_for_each_safe(pos, n, &bucket->waiters) {
+        if (woken >= count)
+            break;
+
+        thread_t *t = container_of(pos, thread_t, futex_node);
+        if (t->futex_uaddr == uaddr && t->futex_proc &&
+            (t->futex_proc == proc || t->futex_proc->pagemap == proc->pagemap)) {
+            list_remove(pos);
+            t->futex_proc = NULL;
+            __atomic_store_n(&t->futex_uaddr, 0, __ATOMIC_RELEASE);
+            sched_unblock_thread(t);
+            woken++;
+        }
+    }
+
+    spinlock_release_irqrestore(&bucket->lock, bflags);
+    return woken;
 }
 
 int futex_wake(uintptr_t uaddr, int count) {
@@ -124,30 +156,7 @@ int futex_wake(uintptr_t uaddr, int count) {
     if (!proc)
         return 0;
 
-    uint32_t bucket_idx = FUTEX_HASH(uaddr);
-    futex_bucket_t *bucket = &g_futex_buckets[bucket_idx];
-
-    spinlock_acquire(&bucket->lock);
-
-    int woken = 0;
-    list_node_t *pos, *n;
-    list_for_each_safe(pos, n, &bucket->waiters) {
-        if (woken >= count)
-            break;
-
-        thread_t *t = container_of(pos, thread_t, futex_node);
-        if (t->futex_uaddr == uaddr && (t->futex_proc == proc || t->futex_proc->pagemap == proc->pagemap)) {
-            list_remove(pos);
-            t->futex_uaddr = 0;
-            t->futex_proc = NULL;
-            t->state = THREAD_READY;
-            sched_add_thread(t);
-            woken++;
-        }
-    }
-
-    spinlock_release(&bucket->lock);
-    return woken;
+    return futex_wake_proc(proc, uaddr, count);
 }
 
 /* Removes a thread from whatever futex bucket it's blocked in, if any.
@@ -163,13 +172,14 @@ void futex_remove_thread(thread_t *t) {
     uint32_t bucket_idx = FUTEX_HASH(t->futex_uaddr);
     futex_bucket_t *bucket = &g_futex_buckets[bucket_idx];
 
-    spinlock_acquire(&bucket->lock);
+    uint64_t bflags;
+    spinlock_acquire_irqsave(&bucket->lock, &bflags);
     if (t->futex_proc) {
         list_remove(&t->futex_node);
-        t->futex_uaddr = 0;
+        __atomic_store_n(&t->futex_uaddr, 0, __ATOMIC_RELEASE);
         t->futex_proc = NULL;
     }
-    spinlock_release(&bucket->lock);
+    spinlock_release_irqrestore(&bucket->lock, bflags);
 }
 
 int futex_requeue(uintptr_t uaddr1, int wake_count, uintptr_t uaddr2, int requeue_count) {
@@ -186,14 +196,15 @@ int futex_requeue(uintptr_t uaddr1, int wake_count, uintptr_t uaddr2, int requeu
     futex_bucket_t *b2 = &g_futex_buckets[b2_idx];
 
     /* Always acquire locks in bucket index order to prevent deadlock */
+    uint64_t f1 = 0, f2 = 0;
     if (b1_idx < b2_idx) {
-        spinlock_acquire(&b1->lock);
-        spinlock_acquire(&b2->lock);
+        spinlock_acquire_irqsave(&b1->lock, &f1);
+        spinlock_acquire_irqsave(&b2->lock, &f2);
     } else if (b1_idx > b2_idx) {
-        spinlock_acquire(&b2->lock);
-        spinlock_acquire(&b1->lock);
+        spinlock_acquire_irqsave(&b2->lock, &f2);
+        spinlock_acquire_irqsave(&b1->lock, &f1);
     } else {
-        spinlock_acquire(&b1->lock);
+        spinlock_acquire_irqsave(&b1->lock, &f1);
     }
 
     int woken = 0;
@@ -202,17 +213,17 @@ int futex_requeue(uintptr_t uaddr1, int wake_count, uintptr_t uaddr2, int requeu
     list_node_t *pos, *n;
     list_for_each_safe(pos, n, &b1->waiters) {
         thread_t *t = container_of(pos, thread_t, futex_node);
-        if (t->futex_uaddr == uaddr1 && (t->futex_proc == proc || t->futex_proc->pagemap == proc->pagemap)) {
+        if (t->futex_uaddr == uaddr1 && t->futex_proc &&
+            (t->futex_proc == proc || t->futex_proc->pagemap == proc->pagemap)) {
             if (woken < wake_count) {
                 list_remove(pos);
-                t->futex_uaddr = 0;
                 t->futex_proc = NULL;
-                t->state = THREAD_READY;
-                sched_add_thread(t);
+                __atomic_store_n(&t->futex_uaddr, 0, __ATOMIC_RELEASE);
+                sched_unblock_thread(t);
                 woken++;
             } else if (requeued < requeue_count) {
                 list_remove(pos);
-                t->futex_uaddr = uaddr2;
+                __atomic_store_n(&t->futex_uaddr, uaddr2, __ATOMIC_RELEASE);
                 list_add_tail(&b2->waiters, &t->futex_node);
                 requeued++;
             } else {
@@ -221,10 +232,15 @@ int futex_requeue(uintptr_t uaddr1, int wake_count, uintptr_t uaddr2, int requeu
         }
     }
 
-    if (b1_idx != b2_idx) {
-        spinlock_release(&b2->lock);
+    if (b1_idx < b2_idx) {
+        spinlock_release_irqrestore(&b2->lock, f2);
+        spinlock_release_irqrestore(&b1->lock, f1);
+    } else if (b1_idx > b2_idx) {
+        spinlock_release_irqrestore(&b1->lock, f1);
+        spinlock_release_irqrestore(&b2->lock, f2);
+    } else {
+        spinlock_release_irqrestore(&b1->lock, f1);
     }
-    spinlock_release(&b1->lock);
 
     return woken + requeued;
 }

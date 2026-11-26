@@ -48,7 +48,7 @@ endef
 
 # Directory for configure/meson serialization locks (mkdir-based, portable
 # across macOS/Linux, no `flock` dependency).
-BUILD_LOCK_DIR := $(ROOT_DIR)/build/.locks
+BUILD_LOCK_DIR = $(BUILD_DIR)/.locks
 
 # Third-party source trees whose headers the sysroot recipe copies
 # (libc/Makefile: xorgproto, xtrans, xcb-proto, libxcvt, pixman, util-macros).
@@ -144,6 +144,7 @@ QEMU    := qemu-system-x86_64
 # Global Directories & Subsystem Caching Stamps
 # ==============================================================================
 BUILD_DIR           := $(ROOT_DIR)/build
+export SZPONT_BUILD_DIR := $(BUILD_DIR)
 ISO_DIR             := $(BUILD_DIR)/iso_root
 ROOTFS_DIR          := $(BUILD_DIR)/rootfs
 SYSROOT_DIR         := $(BUILD_DIR)/sysroot
@@ -265,7 +266,6 @@ USER_USR_BIN_PROGS := \
     $(ROOTFS_DIR)/usr/bin/zsh \
     $(ROOTFS_DIR)/usr/bin/fastfetch \
     $(ROOTFS_DIR)/usr/bin/donut \
-    $(ROOTFS_DIR)/usr/bin/hello \
     $(ROOTFS_DIR)/usr/bin/startx \
     $(ROOTFS_DIR)/usr/bin/szpontlogin \
     $(ROOTFS_DIR)/usr/bin/szpontdesktop \
@@ -285,12 +285,27 @@ USER_TEST_PROGS := \
     $(ROOTFS_DIR)/usr/tbin/drmtest \
     $(ROOTFS_DIR)/usr/tbin/randtest \
     $(ROOTFS_DIR)/usr/tbin/tmpfstest \
+    $(ROOTFS_DIR)/usr/tbin/shmtest \
     $(ROOTFS_DIR)/usr/tbin/ptytest \
     $(ROOTFS_DIR)/usr/tbin/kqueuetest \
     $(ROOTFS_DIR)/usr/tbin/mousetest \
     $(ROOTFS_DIR)/usr/tbin/unixtest \
     $(ROOTFS_DIR)/usr/tbin/gittest \
-    $(ROOTFS_DIR)/usr/tbin/cpptest
+    $(ROOTFS_DIR)/usr/tbin/curltest \
+    $(ROOTFS_DIR)/usr/tbin/mesadrmtest \
+    $(ROOTFS_DIR)/usr/tbin/cpptest \
+    $(ROOTFS_DIR)/usr/tbin/gltriangle \
+    $(ROOTFS_DIR)/usr/tbin/glxgears \
+    $(ROOTFS_DIR)/usr/tbin/epolltest \
+    $(ROOTFS_DIR)/usr/tbin/eventfdtest \
+    $(ROOTFS_DIR)/usr/tbin/inotifytest \
+    $(ROOTFS_DIR)/usr/tbin/timerfdtest \
+    $(ROOTFS_DIR)/usr/tbin/signalfdtest \
+    $(ROOTFS_DIR)/usr/tbin/compattest \
+    $(ROOTFS_DIR)/usr/tbin/sysfstest \
+    $(ROOTFS_DIR)/usr/tbin/corecheck \
+    $(ROOTFS_DIR)/usr/tbin/hello \
+    $(ROOTFS_DIR)/usr/tbin/szpontui_demo
 
 USER_PROGS := $(USER_BIN_PROGS) $(USER_USR_BIN_PROGS) $(USER_TEST_PROGS)
 

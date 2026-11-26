@@ -59,6 +59,7 @@ struct pollfd {
 #define CLONE_FS 0x00000200
 #define CLONE_FILES 0x00000400
 #define CLONE_SIGHAND 0x00000800
+#define CLONE_VFORK 0x00002000
 #define CLONE_THREAD 0x00010000
 #define CLONE_SETTLS 0x00080000
 #define CLONE_PARENT_SETTID 0x00100000
@@ -808,6 +809,28 @@ static int64_t sys_fcntl(int fd, int cmd, uint64_t arg) {
     case 4: /* F_SETFL */
         proc->fds[fd]->flags = (int)arg;
         return 0;
+    case 1033: /* F_ADD_SEALS */ {
+        file_descriptor_t *f = proc->fds[fd];
+        if (!f->is_memfd)
+            return -22; /* -EINVAL: seals only apply to memfd */
+        unsigned int seals = (unsigned int)arg;
+        if (seals & ~0x001FU)
+            return -22; /* -EINVAL: unknown seal bits */
+        if (!f->memfd_allow_sealing)
+            return -1; /* -EPERM: created without MFD_ALLOW_SEALING */
+        if (f->memfd_seals & 0x0001U)
+            return -1; /* -EPERM: F_SEAL_SEAL already set */
+        /* NOTE: SEAL_WRITE enforcement against existing writable mappings is
+         * not tracked yet; seals are recorded so IPC negotiation succeeds. */
+        f->memfd_seals |= seals;
+        return 0;
+    }
+    case 1034: /* F_GET_SEALS */ {
+        file_descriptor_t *f = proc->fds[fd];
+        if (!f->is_memfd)
+            return -22; /* -EINVAL */
+        return (int64_t)f->memfd_seals;
+    }
     default:
         return 0;
     }
@@ -1537,6 +1560,7 @@ static int64_t sys_linkat(int olddirfd, const char *oldpath, int newdirfd, const
 }
 
 static int64_t sys_fork(void);
+static int64_t sys_vfork(void);
 
 static int64_t sys_gettid(void) {
     thread_t *curr = sched_get_current_thread();
@@ -1573,10 +1597,16 @@ static int64_t sys_arch_prctl(int code, uintptr_t addr) {
     return -1;
 }
 
+#define PR_SET_PDEATHSIG 1
+#define PR_GET_PDEATHSIG 2
+#define PR_SET_DUMPABLE 3
+#define PR_GET_DUMPABLE 4
 #define PR_SET_NAME 15
 #define PR_GET_NAME 16
 #define PR_SET_NO_NEW_PRIVS 38
 #define PR_GET_NO_NEW_PRIVS 39
+#define PR_SET_SECCOMP 22
+#define PR_GET_SECCOMP 21
 #define TASK_COMM_LEN 16
 
 static int64_t sys_prctl(int option, uint64_t arg2, uint64_t arg3, uint64_t arg4, uint64_t arg5) {
@@ -1589,11 +1619,17 @@ static int64_t sys_prctl(int option, uint64_t arg2, uint64_t arg3, uint64_t arg4
     case PR_SET_NAME: {
         char name[TASK_COMM_LEN];
         memset(name, 0, sizeof(name));
-        if (copy_string_from_user(name, (uintptr_t)arg2, sizeof(name)) < 0)
-            return -14; /* -EFAULT */
+        /* Linux truncates to 15 chars + NUL; only fault on bad addresses. */
+        if (copy_string_from_user(name, (uintptr_t)arg2, sizeof(name)) < 0) {
+            char longname[TASK_COMM_LEN];
+            if (!copy_from_user(longname, (uintptr_t)arg2, sizeof(longname)))
+                return -14; /* -EFAULT */
+            longname[sizeof(longname) - 1] = '\0';
+            memcpy(name, longname, sizeof(name));
+        }
         memcpy(curr->name, name, sizeof(curr->name));
         /* The first thread is the one ps/top identify the process by. */
-        if (proc->threads.next == &curr->proc_node) {
+        if (process_is_main_thread(proc, curr)) {
             memset(proc->name, 0, sizeof(proc->name));
             memcpy(proc->name, name, sizeof(name));
         }
@@ -1616,6 +1652,36 @@ static int64_t sys_prctl(int option, uint64_t arg2, uint64_t arg3, uint64_t arg4
         if (arg2 || arg3 || arg4 || arg5)
             return -22; /* -EINVAL */
         return proc->no_new_privs ? 1 : 0;
+    case PR_SET_PDEATHSIG:
+        if (arg3 || arg4 || arg5)
+            return -22; /* -EINVAL */
+        if (arg2 > 64)
+            return -22; /* -EINVAL: not a valid signal number */
+        curr->pdeathsig = (int)arg2;
+        return 0;
+    case PR_GET_PDEATHSIG:
+        if (arg3 || arg4 || arg5)
+            return -22; /* -EINVAL */
+        if (!arg2)
+            return -22; /* -EINVAL */
+        {
+            int sig = curr->pdeathsig;
+            if (!copy_to_user((uintptr_t)arg2, &sig, sizeof(sig)))
+                return -14; /* -EFAULT */
+        }
+        return 0;
+    case PR_SET_DUMPABLE:
+        if (arg2 > 1 || arg3 || arg4 || arg5)
+            return -22; /* -EINVAL */
+        return 0;
+    case PR_GET_DUMPABLE:
+        if (arg2 || arg3 || arg4 || arg5)
+            return -22; /* -EINVAL */
+        return 1;
+    case PR_SET_SECCOMP:
+    case PR_GET_SECCOMP:
+        /* No seccomp-bpf support: report as invalid so sandboxes fall back. */
+        return -22; /* -EINVAL */
     default:
         return -22; /* -EINVAL */
     }
@@ -1627,17 +1693,33 @@ static int64_t sys_sched_getaffinity(pid_t pid, size_t len, uintptr_t user_mask)
     if (!proc || !curr)
         return -3; /* -ESRCH */
 
-    /* SMP_MAX_CPUS == 64, so the kernel cpumask is exactly one word. */
-    if (len < sizeof(uint64_t) || (len & (sizeof(uint64_t) - 1)))
+    /* SMP_MAX_CPUS == 64, so the kernel cpumask is exactly one word.
+     * glibc/Firefox may pass 128 bytes; accept any len >= 8. */
+    if (len < sizeof(uint64_t))
         return -22; /* -EINVAL */
     if (pid != 0 && pid != proc->pid && pid != curr->tid && !process_get_by_pid(pid))
         return -3; /* -ESRCH */
 
     /* Threads are not pinned yet, so every online CPU is eligible. */
     uint32_t count = smp_get_cpu_count();
+    if (count == 0)
+        count = 1;
     uint64_t mask = count >= 64 ? ~0ULL : (1ULL << count) - 1;
     if (!copy_to_user(user_mask, &mask, sizeof(mask)))
         return -14; /* -EFAULT */
+    if (len > sizeof(mask)) {
+        /* Zero-fill the tail so large glibc cpu_set_t buffers compare cleanly. */
+        uint64_t zero = 0;
+        uintptr_t base = user_mask + sizeof(mask);
+        size_t tail = len - sizeof(mask);
+        if (tail > 1024)
+            tail = 1024; /* Sanity cap: never zero unbounded user memory */
+        for (size_t off = 0; off < tail; off += sizeof(zero)) {
+            size_t chunk = tail - off < sizeof(zero) ? tail - off : sizeof(zero);
+            if (!copy_to_user(base + off, &zero, chunk))
+                return -14; /* -EFAULT */
+        }
+    }
     return (int64_t)sizeof(mask);
 }
 
@@ -1645,7 +1727,10 @@ static int64_t sys_sched_getaffinity(pid_t pid, size_t len, uintptr_t user_mask)
 #define MADV_RANDOM 1
 #define MADV_SEQUENTIAL 2
 #define MADV_WILLNEED 3
+#define MADV_DONTNEED 4
 #define MADV_FREE 8
+#define MADV_DONTFORK 10
+#define MADV_DOFORK 11
 #define MADV_MERGEABLE 12
 #define MADV_UNMERGEABLE 13
 #define MADV_HUGEPAGE 14
@@ -1654,6 +1739,8 @@ static int64_t sys_sched_getaffinity(pid_t pid, size_t len, uintptr_t user_mask)
 #define MADV_DODUMP 17
 
 static int64_t sys_madvise(void *addr, size_t len, int advice) {
+    if (len == 0)
+        return 0;
     if (((uintptr_t)addr & (PAGE_SIZE - 1)) || !vmm_user_range((uintptr_t)addr, len))
         return -22; /* -EINVAL */
 
@@ -1668,12 +1755,35 @@ static int64_t sys_madvise(void *addr, size_t len, int advice) {
     case MADV_NOHUGEPAGE:
     case MADV_DONTDUMP:
     case MADV_DODUMP:
+    case MADV_DONTFORK:
+    case MADV_DOFORK:
     case MADV_FREE:
-        /* Pure hints: nothing to tune, and MADV_FREE may legally keep the old contents. */
+        /* Pure hints: nothing to tune, and MADV_FREE may legally keep the old contents.
+         * DONTFORK/DOFORK are accepted as no-ops (children inherit mappings). */
         return 0;
+    case MADV_DONTNEED: {
+        /* Linux semantics for private anonymous pages: discard contents, next
+         * access reads back zeroes. Implement by zeroing present user pages
+         * in place; file-backed mappings are private copies in SzpontOS, so
+         * zeroing matches the observable behavior for anonymous memory which
+         * is all mozjemalloc uses this for. */
+        process_t *proc = sched_get_current_process();
+        if (!proc || !proc->pagemap)
+            return -22; /* -EINVAL */
+        uintptr_t start = (uintptr_t)addr;
+        uintptr_t end = start + len;
+        for (uintptr_t v = start; v < end; v += PAGE_SIZE) {
+            uintptr_t phys = vmm_user_page_phys(proc->pagemap, v, true);
+            if (phys == 0) {
+                /* Read-only or unmapped page: nothing to discard. Skip rather
+                 * than fail so mixed PROT_NONE guards don't abort purge. */
+                continue;
+            }
+            memset(PHYS_TO_VIRT(phys), 0, PAGE_SIZE);
+        }
+        return 0;
+    }
     default:
-        /* MADV_DONTNEED must zero private pages and MADV_DONTFORK must change
-         * fork(); both need per-mapping metadata the VMM does not track yet. */
         return -22; /* -EINVAL */
     }
 }
@@ -1703,6 +1813,8 @@ static int64_t sys_futex(uintptr_t uaddr, int futex_op, int val, uintptr_t timeo
 
 static int64_t sys_clone(uint64_t flags, uintptr_t child_stack, uintptr_t ptid, uintptr_t ctid, uintptr_t tls) {
     if (!(flags & CLONE_THREAD)) {
+        if (flags & CLONE_VFORK)
+            return sys_vfork();
         return sys_fork();
     }
 
@@ -1715,10 +1827,13 @@ static int64_t sys_clone(uint64_t flags, uintptr_t child_stack, uintptr_t ptid, 
     if (!child_t)
         return -1;
 
-    static tid_t s_clone_tid = 100;
-    child_t->tid = s_clone_tid++;
+    child_t->tid = process_alloc_tid();
     child_t->process = proc;
     child_t->state = THREAD_READY;
+    child_t->running_cpu = -1;
+    list_init(&child_t->sched_node);
+    list_init(&child_t->proc_node);
+    list_init(&child_t->futex_node);
     child_t->user_entry = parent_t->user_entry;
     child_t->user_stack = child_stack ? child_stack : parent_t->user_stack;
 
@@ -1730,18 +1845,30 @@ static int64_t sys_clone(uint64_t flags, uintptr_t child_stack, uintptr_t ptid, 
 
     if (flags & CLONE_CHILD_CLEARTID) {
         child_t->clear_child_tid = ctid;
+    } else {
+        child_t->clear_child_tid = 0;
     }
+    child_t->robust_head = 0;
+    child_t->robust_len = 0;
+    child_t->rseq_ptr = 0;
+    child_t->rseq_len = 0;
+    child_t->rseq_flags = 0;
+    child_t->rseq_sig = 0;
+    child_t->pdeathsig = 0;
+    /* New threads inherit the creator's mask (POSIX); robust/rseq start clear. */
+    child_t->blocked_signals = parent_t->blocked_signals;
+    child_t->thread_pending = 0;
 
     if (flags & CLONE_CHILD_SETTID) {
-        if (vmm_virt_to_phys(proc->pagemap, ctid)) {
-            *(int *)ctid = child_t->tid;
-        }
+        int32_t tid32 = child_t->tid;
+        if (!copy_to_user(ctid, &tid32, sizeof(tid32)))
+            klog_warn("Syscall: clone CHILD_SETTID EFAULT (ctid=0x%lx)", (unsigned long)ctid);
     }
 
     if (flags & CLONE_PARENT_SETTID) {
-        if (vmm_virt_to_phys(proc->pagemap, ptid)) {
-            *(int *)ptid = child_t->tid;
-        }
+        int32_t tid32 = child_t->tid;
+        if (!copy_to_user(ptid, &tid32, sizeof(tid32)))
+            klog_warn("Syscall: clone PARENT_SETTID EFAULT (ptid=0x%lx)", (unsigned long)ptid);
     }
 
     memcpy(child_t->fpu_state, parent_t->fpu_state, 512);
@@ -1782,13 +1909,204 @@ static int64_t sys_clone(uint64_t flags, uintptr_t child_stack, uintptr_t ptid, 
 
     child_t->rsp = (uintptr_t)sp;
 
-    list_add_tail(&proc->threads, &child_t->proc_node);
+    if (!process_attach_thread(proc, child_t)) {
+        pmm_free_pages(stack_phys, stack_pages);
+        kfree(child_t);
+        return -1;
+    }
     sched_add_thread(child_t);
 
     return child_t->tid;
 }
 
-static int64_t sys_fork(void) {
+/* Linux clone3(2) struct clone_args (x86_64, first 64 bytes are stable ABI). */
+struct clone_args {
+    uint64_t flags;
+    uint64_t pidfd;
+    uint64_t child_tid;
+    uint64_t parent_tid;
+    uint64_t exit_signal;
+    uint64_t stack;
+    uint64_t stack_size;
+    uint64_t tls;
+    uint64_t set_tid;
+    uint64_t set_tid_size;
+    uint64_t cgroup;
+};
+
+#define CLONE_SYSVSEM 0x00040000U
+#define CLONE_NEWNS 0x00020000U
+#define CLONE_NEWUTS 0x04000000U
+#define CLONE_NEWIPC 0x08000000U
+#define CLONE_NEWUSER 0x10000000U
+#define CLONE_NEWPID 0x20000000U
+#define CLONE_NEWNET 0x40000000U
+
+static int64_t sys_clone3(uintptr_t uargs, size_t size) {
+    if (size < 64)
+        return -22; /* -EINVAL: struct clone_args too small */
+    if (size > 256)
+        return -22; /* -EINVAL: unreasonably large */
+    if (uargs == 0)
+        return -14; /* -EFAULT */
+
+    struct clone_args kargs;
+    memset(&kargs, 0, sizeof(kargs));
+    size_t copy_len = size < sizeof(kargs) ? size : sizeof(kargs);
+    if (!copy_from_user(&kargs, uargs, copy_len))
+        return -14; /* -EFAULT */
+    if (size > sizeof(kargs)) {
+        /* Future extension bytes must be zero per Linux ABI. */
+        uint8_t extra[256 - 88];
+        size_t extra_len = size - sizeof(kargs);
+        if (!copy_from_user(extra, uargs + sizeof(kargs), extra_len))
+            return -14; /* -EFAULT */
+        for (size_t i = 0; i < extra_len; i++) {
+            if (extra[i] != 0)
+                return -22; /* -EINVAL */
+        }
+    }
+
+    /* Unsupported extensions: pidfd, set_tid array, cgroup. */
+    if (kargs.pidfd != 0 || kargs.set_tid != 0 || kargs.set_tid_size != 0 || kargs.cgroup != 0)
+        return -22; /* -EINVAL */
+    /* No namespace support. */
+    if (kargs.flags & (CLONE_NEWNS | CLONE_NEWUTS | CLONE_NEWIPC | CLONE_NEWUSER | CLONE_NEWPID | CLONE_NEWNET))
+        return -22; /* -EINVAL */
+    if (kargs.exit_signal > 255)
+        return -22; /* -EINVAL */
+
+    uintptr_t child_stack = 0;
+    if (kargs.stack != 0) {
+        if (kargs.stack_size == 0)
+            return -22; /* -EINVAL */
+        if (!vmm_user_range((uintptr_t)kargs.stack, (size_t)kargs.stack_size))
+            return -22; /* -EINVAL */
+        child_stack = (uintptr_t)(kargs.stack + kargs.stack_size);
+    } else if (kargs.stack_size != 0) {
+        return -22; /* -EINVAL */
+    }
+
+    if (kargs.flags & CLONE_THREAD) {
+        if (kargs.exit_signal != 0)
+            return -22; /* -EINVAL: CLONE_THREAD requires exit_signal == 0 */
+        return sys_clone(kargs.flags, child_stack, (uintptr_t)kargs.parent_tid, (uintptr_t)kargs.child_tid,
+                         (uintptr_t)kargs.tls);
+    }
+
+    /* Fork-like clone3: exit_signal 0/SIGCHLD accepted, tids honored best-effort. */
+    if (kargs.flags & (CLONE_PARENT_SETTID | CLONE_CHILD_SETTID | CLONE_CHILD_CLEARTID | CLONE_SETTLS)) {
+        /* Thread-only flags without CLONE_THREAD are invalid on Linux. */
+        if (!(kargs.flags & CLONE_VM))
+            return -22; /* -EINVAL */
+        return sys_clone(kargs.flags, child_stack, (uintptr_t)kargs.parent_tid, (uintptr_t)kargs.child_tid,
+                         (uintptr_t)kargs.tls);
+    }
+    if (child_stack != 0 || kargs.tls != 0 || kargs.child_tid != 0 || kargs.parent_tid != 0)
+        return -22; /* -EINVAL: fork-like clone takes no stack/tls/tid */
+    (void)child_stack;
+    if (kargs.flags & CLONE_VFORK)
+        return sys_vfork();
+    return sys_fork();
+}
+
+#define RSEQ_FLAG_UNREGISTER (1U << 0)
+#define RSEQ_LEN 32
+
+static int64_t sys_rseq(uintptr_t rseq_addr, uint32_t rseq_len, int flags, uint32_t sig) {
+    thread_t *curr = sched_get_current_thread();
+    process_t *proc = sched_get_current_process();
+    if (!curr || !proc)
+        return -3; /* -ESRCH */
+
+    if (flags & RSEQ_FLAG_UNREGISTER) {
+        if (rseq_len != 0 && rseq_len != RSEQ_LEN)
+            return -22; /* -EINVAL */
+        if (curr->rseq_ptr != 0 && rseq_addr != 0 && curr->rseq_ptr != rseq_addr)
+            return -22; /* -EINVAL: unregister must match registration */
+        curr->rseq_ptr = 0;
+        curr->rseq_len = 0;
+        curr->rseq_flags = 0;
+        curr->rseq_sig = 0;
+        return 0;
+    }
+
+    if (flags != 0)
+        return -22; /* -EINVAL: unknown flags */
+    if (rseq_len != RSEQ_LEN)
+        return -22; /* -EINVAL */
+    if (rseq_addr == 0 || (rseq_addr & 31))
+        return -22; /* -EINVAL: must be 32-byte aligned */
+    if (rseq_addr > USER_ADDR_MAX || !vmm_user_range(rseq_addr, rseq_len))
+        return -14; /* -EFAULT */
+    if (!vmm_user_access(proc->pagemap, rseq_addr, rseq_len, true))
+        return -14; /* -EFAULT */
+
+    curr->rseq_ptr = rseq_addr;
+    curr->rseq_len = rseq_len;
+    curr->rseq_flags = (uint32_t)flags;
+    curr->rseq_sig = sig;
+
+    /* Publish the current CPU so glibc doesn't observe a stale 0xFFFFFFFF. */
+    cpu_t *cpu = smp_current_cpu();
+    uint32_t cpu_id = cpu ? cpu->cpu_id : 0;
+    uint32_t ids[2] = {cpu_id, cpu_id};
+    if (!copy_to_user(rseq_addr, ids, sizeof(ids)))
+        return -14; /* -EFAULT */
+    return 0;
+}
+
+#define ROBUST_LIST_HEAD_SIZE 24
+
+static int64_t sys_set_robust_list(uintptr_t head, size_t len) {
+    thread_t *curr = sched_get_current_thread();
+    if (!curr)
+        return -3; /* -ESRCH */
+    if (head == 0) {
+        curr->robust_head = 0;
+        curr->robust_len = 0;
+        return 0;
+    }
+    if (len != ROBUST_LIST_HEAD_SIZE)
+        return -22; /* -EINVAL */
+    if (head > USER_ADDR_MAX)
+        return -14; /* -EFAULT */
+    curr->robust_head = head;
+    curr->robust_len = len;
+    return 0;
+}
+
+static int64_t sys_get_robust_list(pid_t pid, uintptr_t head_ptr, uintptr_t len_ptr) {
+    process_t *proc = sched_get_current_process();
+    thread_t *curr = sched_get_current_thread();
+    if (!proc || !curr)
+        return -3; /* -ESRCH */
+    if (pid != 0 && pid != proc->pid && pid != curr->tid)
+        return -3; /* -ESRCH */
+    if (head_ptr == 0 || len_ptr == 0)
+        return -14; /* -EFAULT */
+    uintptr_t head = curr->robust_head;
+    size_t len = curr->robust_head ? curr->robust_len : 0;
+    if (!copy_to_user(head_ptr, &head, sizeof(head)))
+        return -14; /* -EFAULT */
+    if (!copy_to_user(len_ptr, &len, sizeof(len)))
+        return -14; /* -EFAULT */
+    return 0;
+}
+
+static int64_t sys_seccomp(unsigned int operation, unsigned int flags, uintptr_t args) {
+    (void)operation;
+    (void)flags;
+    (void)args;
+    /* No seccomp-bpf support. Return EINVAL (not ENOSYS) so Gecko's sandbox
+     * broker detects "unsupported" instead of "unexpected errno 38". */
+    return -22; /* -EINVAL */
+}
+
+/* Core fork implementation. With vfork_suspend=true the parent blocks until
+ * the child execs or exits (COW address space: a safe superset of strict
+ * vfork sharing, documented in the vfork handler). */
+static int64_t do_fork(bool vfork_suspend) {
     process_t *parent = sched_get_current_process();
     if (!parent)
         return -1;
@@ -1813,7 +2131,6 @@ static int64_t sys_fork(void) {
     child->no_new_privs = parent->no_new_privs;
     child->ngroups = parent->ngroups;
     memcpy(child->groups, parent->groups, sizeof(child->groups));
-    child->blocked_signals = parent->blocked_signals;
     memcpy(child->signal_handlers, parent->signal_handlers, sizeof(child->signal_handlers));
     memcpy(child->sigactions, parent->sigactions, sizeof(child->sigactions));
     memcpy(child->rlimits, parent->rlimits, sizeof(child->rlimits));
@@ -1859,13 +2176,28 @@ static int64_t sys_fork(void) {
     if (!child_t)
         return -1;
 
-    static tid_t s_fork_tid = 100;
-    child_t->tid = s_fork_tid++;
+    child_t->tid = process_alloc_tid();
     child_t->process = child;
     child_t->state = THREAD_READY;
+    child_t->running_cpu = -1;
+    list_init(&child_t->sched_node);
+    list_init(&child_t->proc_node);
+    list_init(&child_t->futex_node);
     child_t->user_entry = parent_t->user_entry;
     child_t->user_stack = parent_t->user_stack;
     child_t->fs_base = parent_t->fs_base;
+    /* Forked address space is COW-cloned, so user pointers stay valid. */
+    child_t->robust_head = parent_t->robust_head;
+    child_t->robust_len = parent_t->robust_len;
+    child_t->rseq_ptr = parent_t->rseq_ptr;
+    child_t->rseq_len = parent_t->rseq_len;
+    child_t->rseq_flags = parent_t->rseq_flags;
+    child_t->rseq_sig = parent_t->rseq_sig;
+    child_t->pdeathsig = 0;
+    child_t->clear_child_tid = 0;
+    /* Forked child (single thread) inherits the calling thread's mask. */
+    child_t->blocked_signals = parent_t->blocked_signals;
+    child_t->thread_pending = 0;
     memcpy(child_t->fpu_state, parent_t->fpu_state, 512);
 
     /* Allocate 16 KiB kernel stack */
@@ -1900,10 +2232,54 @@ static int64_t sys_fork(void) {
 
     child_t->rsp = (uintptr_t)sp;
 
-    list_add_tail(&child->threads, &child_t->proc_node);
+    child->vfork_done = false;
+    process_attach_thread(child, child_t);
     sched_add_thread(child_t);
 
-    return child->pid;
+    pid_t child_pid = child->pid;
+    if (vfork_suspend) {
+        /* Suspend the parent until the child releases via exec or exit.
+         * Polling (not a foreign waitqueue) keeps the blocked parent's
+         * lifetime tied to its own stack: the child may be reaped by a
+         * sibling thread while we wait, so re-resolve by pid each tick. */
+        for (;;) {
+            process_t *c = process_get_by_pid(child_pid);
+            bool done = false;
+            if (!c) {
+                done = true; /* Reaped: release observed. */
+            } else {
+                done = c->vfork_done || c->status != PROCESS_ACTIVE;
+            }
+            if (done)
+                break;
+            /* A fatal signal to the parent aborts the wait. */
+            uint32_t fatal_mask = (1U << SIGHUP) | (1U << SIGINT) | (1U << SIGQUIT) | (1U << SIGKILL) |
+                                  (1U << SIGTERM) | (1U << SIGSEGV) | (1U << SIGILL);
+            thread_t *self = sched_get_current_thread();
+            process_t *self_proc = sched_get_current_process();
+            uint32_t pend = 0;
+            uint32_t blocked = 0;
+            if (self_proc)
+                pend = self_proc->pending_signals;
+            if (self) {
+                pend |= self->thread_pending;
+                blocked = self->blocked_signals;
+            }
+            if (pend & fatal_mask & ~blocked)
+                break;
+            thread_sleep(2);
+        }
+    }
+
+    return child_pid;
+}
+
+static int64_t sys_fork(void) {
+    return do_fork(false);
+}
+
+static int64_t sys_vfork(void) {
+    return do_fork(true);
 }
 
 static int64_t sys_iopl(int level) {
@@ -2082,10 +2458,23 @@ static int64_t sys_execve(const char *pathname, char *const argv[], char *const 
     proc->mmap_current = 0x0000600000000000ULL;
     strncpy(proc->name, resolved_path, sizeof(proc->name) - 1);
     thread_t *exec_thread = sched_get_current_thread();
-    if (exec_thread)
+    if (exec_thread) {
         exec_thread->name[0] = '\0';
+        /* Old address space is gone: user pointers from rseq/robust would
+         * dangle, so drop the registrations (the new image re-registers). */
+        exec_thread->robust_head = 0;
+        exec_thread->robust_len = 0;
+        exec_thread->rseq_ptr = 0;
+        exec_thread->rseq_len = 0;
+        exec_thread->rseq_flags = 0;
+        exec_thread->rseq_sig = 0;
+        exec_thread->clear_child_tid = 0;
+    }
     vmm_switch_address_space(new_map);
     vmm_destroy_address_space(old_map);
+
+    /* A successful exec releases a vfork parent blocked in sys_vfork. */
+    proc->vfork_done = true;
 
     /* Close all FD_CLOEXEC file descriptors */
     for (int i = 0; i < MAX_FD; i++) {
@@ -2681,6 +3070,7 @@ static int64_t sys_fdatasync(int fd) {
 
 static int64_t sys_flock(int fd, int operation) {
     process_t *proc = sched_get_current_process();
+    thread_t *self = sched_get_current_thread();
     if (!proc || fd < 0 || fd >= MAX_FD || !proc->fds[fd])
         return -9; /* -EBADF */
 
@@ -2723,7 +3113,11 @@ static int64_t sys_flock(int fd, int operation) {
             if (nonblock) {
                 return -11; /* -EWOULDBLOCK / -EAGAIN */
             }
-            if (proc->pending_signals & ~proc->blocked_signals) {
+            uint32_t flock_mask = self ? self->blocked_signals : 0;
+            uint32_t flock_pend = proc->pending_signals;
+            if (self)
+                flock_pend |= self->thread_pending;
+            if (flock_pend & ~flock_mask) {
                 return -4; /* -EINTR */
             }
             thread_sleep(2);
@@ -2746,7 +3140,11 @@ static int64_t sys_flock(int fd, int operation) {
             if (nonblock) {
                 return -11; /* -EWOULDBLOCK / -EAGAIN */
             }
-            if (proc->pending_signals & ~proc->blocked_signals) {
+            uint32_t flock_mask = self ? self->blocked_signals : 0;
+            uint32_t flock_pend = proc->pending_signals;
+            if (self)
+                flock_pend |= self->thread_pending;
+            if (flock_pend & ~flock_mask) {
                 return -4; /* -EINTR */
             }
             thread_sleep(2);
@@ -3382,15 +3780,30 @@ static int64_t sys_shmctl_handler(int shmid, int cmd, struct shmid_ds *buf) {
 
 static int64_t sys_memfd_create_handler(const char *name, unsigned int flags) {
     (void)name;
+#define MFD_CLOEXEC 0x0001U
+#define MFD_ALLOW_SEALING 0x0002U
+#define MFD_HUGETLB 0x0004U
+#define MFD_NOEXEC_SEAL 0x0008U
+#define MFD_EXEC 0x0010U
+    if (flags & ~(MFD_CLOEXEC | MFD_ALLOW_SEALING | MFD_HUGETLB | MFD_NOEXEC_SEAL | MFD_EXEC))
+        return -22; /* -EINVAL: unknown MFD_* bits */
+    if (flags & MFD_HUGETLB)
+        return -22; /* -EINVAL: no hugetlb support */
+    /* MFD_NOEXEC_SEAL / MFD_EXEC only affect the implicit exec policy; the
+     * backing file is a regular tmpfs node, so accept and continue. */
     char path[64];
     static int memfd_id = 1;
     process_t *proc = sched_get_current_process();
     ksnprintf(path, sizeof(path), "/tmp/.memfd_%d_%d", proc ? proc->pid : 0, memfd_id++);
     int fd = sys_open(path, O_RDWR | O_CREAT | O_TRUNC, 0600);
-    if (fd >= 0 && (flags & 0x0001 /* MFD_CLOEXEC */)) {
-        if (proc && fd < MAX_FD) {
+    if (fd < 0)
+        return fd;
+    if (proc && fd < MAX_FD && proc->fds[fd]) {
+        proc->fds[fd]->is_memfd = true;
+        proc->fds[fd]->memfd_allow_sealing = (flags & MFD_ALLOW_SEALING) != 0;
+        proc->fds[fd]->memfd_seals = (flags & MFD_NOEXEC_SEAL) ? 0 : 0;
+        if (flags & MFD_CLOEXEC)
             proc->fd_cloexec[fd] = true;
-        }
     }
     return fd;
 }
@@ -3407,7 +3820,11 @@ static inline void check_fatal_signals(uint64_t sys_no) {
     uint32_t fatal_mask = (1U << SIGHUP) | (1U << SIGINT) | (1U << SIGQUIT) |
                           (1U << SIGKILL) | (1U << SIGTERM) | (1U << SIGSEGV) |
                           (1U << SIGILL);
-    uint32_t pending_fatal = curr_proc->pending_signals & fatal_mask & ~curr_proc->blocked_signals;
+    thread_t *curr_thread = sched_get_current_thread();
+    uint32_t thread_mask = curr_thread ? curr_thread->blocked_signals : 0;
+    uint32_t pending_fatal = curr_proc->pending_signals & fatal_mask & ~thread_mask;
+    if (curr_thread)
+        pending_fatal |= curr_thread->thread_pending & fatal_mask & ~thread_mask;
     if (pending_fatal) {
         for (int s = 1; s < 32; s++) {
             if (pending_fatal & (1U << s)) {
@@ -3652,8 +4069,20 @@ static uint64_t syscall_dispatch_inner(uint64_t sys_no, uint64_t a1, uint64_t a2
         return sys_ioperm((unsigned long)a1, (unsigned long)a2, (int)a3);
     case SYS_fork:
         return sys_fork();
+    case SYS_vfork:
+        return sys_vfork();
     case SYS_clone:
         return sys_clone(a1, (uintptr_t)a2, (uintptr_t)a3, (uintptr_t)a4, (uintptr_t)a5);
+    case SYS_clone3:
+        return sys_clone3((uintptr_t)a1, (size_t)a2);
+    case SYS_rseq:
+        return sys_rseq((uintptr_t)a1, (uint32_t)a2, (int)a3, (uint32_t)a4);
+    case SYS_set_robust_list:
+        return sys_set_robust_list((uintptr_t)a1, (size_t)a2);
+    case SYS_get_robust_list:
+        return sys_get_robust_list((pid_t)a1, (uintptr_t)a2, (uintptr_t)a3);
+    case SYS_seccomp:
+        return sys_seccomp((unsigned int)a1, (unsigned int)a2, (uintptr_t)a3);
     case SYS_execve:
         return sys_execve((const char *)a1, (char *const *)a2, (char *const *)a3);
     case SYS_exit:
@@ -3675,7 +4104,9 @@ static uint64_t syscall_dispatch_inner(uint64_t sys_no, uint64_t a1, uint64_t a2
     case SYS_kill:
         return process_kill((pid_t)a1, (int)a2);
     case SYS_tkill:
-        return process_kill((pid_t)a1, (int)a2);
+        return process_tkill((tid_t)a1, (int)a2);
+    case SYS_tgkill:
+        return process_tgkill((pid_t)a1, (tid_t)a2, (int)a3);
     case SYS_gettid:
         return sys_gettid();
     case SYS_set_tid_address:

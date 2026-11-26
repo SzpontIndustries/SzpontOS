@@ -34,6 +34,7 @@
  * On failure, partial data may have been written to @dst.
  */
 bool copy_from_user(void *dst, uintptr_t user_src, size_t len);
+bool copy_from_user_pagemap(pagemap_t *pagemap, void *dst, uintptr_t user_src, size_t len);
 
 /*
  * copy_to_user - Copy data from kernel buffer to userspace.
@@ -46,6 +47,7 @@ bool copy_from_user(void *dst, uintptr_t user_src, size_t len);
  * The target page must be mapped writable; otherwise this returns false.
  */
 bool copy_to_user(uintptr_t user_dst, const void *src, size_t len);
+bool copy_to_user_pagemap(pagemap_t *pagemap, uintptr_t user_dst, const void *src, size_t len);
 
 /*
  * copy_string_from_user - Copy a NUL-terminated string from userspace.

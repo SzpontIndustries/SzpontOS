@@ -277,7 +277,14 @@ static ssize_t pty_slave_read(vfs_node_t *node, off_t offset, size_t size, void 
             break;
 
         process_t *curr = sched_get_current_process();
-        if (curr && (curr->pending_signals & ~curr->blocked_signals)) {
+        thread_t *pty_self = sched_get_current_thread();
+        uint32_t pty_pend = curr ? curr->pending_signals : 0;
+        uint32_t pty_mask = 0;
+        if (pty_self) {
+            pty_pend |= pty_self->thread_pending;
+            pty_mask = pty_self->blocked_signals;
+        }
+        if (pty_pend & ~pty_mask) {
             return -4; /* -EINTR */
         }
 
@@ -352,7 +359,14 @@ static ssize_t pty_slave_write(vfs_node_t *node, off_t offset, size_t size, cons
             break;
 
         process_t *curr = sched_get_current_process();
-        if (curr && (curr->pending_signals & ~curr->blocked_signals)) {
+        thread_t *pty_self = sched_get_current_thread();
+        uint32_t pty_pend = curr ? curr->pending_signals : 0;
+        uint32_t pty_mask = 0;
+        if (pty_self) {
+            pty_pend |= pty_self->thread_pending;
+            pty_mask = pty_self->blocked_signals;
+        }
+        if (pty_pend & ~pty_mask) {
             return written > 0 ? (ssize_t)written : -4; /* -EINTR */
         }
 

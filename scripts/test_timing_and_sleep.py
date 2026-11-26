@@ -40,9 +40,10 @@ def test_timing_and_sleep():
         while time.time() - start_time < 30:
             r, _, _ = select.select([proc.stdout], [], [], 0.1)
             if r:
-                chunk = os.read(proc.stdout.fileno(), 1024).decode('utf-8', errors='ignore')
-                if not chunk:
+                raw = os.read(proc.stdout.fileno(), 1024)
+                if not raw:
                     break
+                chunk = raw.decode('utf-8', errors='ignore')
                 output += chunk
                 sys.stdout.write(chunk)
                 sys.stdout.flush()

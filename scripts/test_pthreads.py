@@ -38,16 +38,18 @@ def run_test():
             r, _, _ = select.select([master], [], [], 0.1)
             if r:
                 try:
-                    chunk = os.read(master, 1024).decode('utf-8', errors='ignore')
-                    if not chunk:
+                    raw = os.read(master, 1024)
+                    if not raw:
                         break
+                    chunk = raw.decode('utf-8', errors='ignore')
                     output += chunk
                     sys.stdout.write(chunk)
                     sys.stdout.flush()
 
                     if not sent_command and "Type 'help'" in output and "# " in output:
-                        print("\n[TEST] Sending 'threadtest'...", flush=True)
-                        os.write(master, b"threadtest\n")
+                        time.sleep(2.5)
+                        print("\n[TEST] Sending '/usr/tbin/threadtest'...", flush=True)
+                        os.write(master, b"/usr/tbin/threadtest\n")
                         sent_command = True
                         sent_time = time.time()
 

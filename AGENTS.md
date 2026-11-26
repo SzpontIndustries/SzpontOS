@@ -302,7 +302,7 @@ The kernel implements over 100 POSIX system calls in [kernel/src/syscall/syscall
 | 22 | `SYS_pipe` | Create unidirectional IPC data channel |
 | 23 | `SYS_select` | Synchronous I/O multiplexing |
 | 24 | `SYS_yield` | Yield remaining CPU timeslice |
-| 28 | `SYS_madvise` | Memory usage hints (`MADV_WILLNEED`, `MADV_FREE`, ...); `MADV_DONTNEED` returns `-EINVAL` |
+| 28 | `SYS_madvise` | Memory usage hints; `MADV_DONTNEED` zeroes anonymous pages, `MADV_FREE`/`MADV_DONTFORK`/`MADV_DOFORK` are no-ops |
 | 29 | `SYS_shmget` | Allocate SysV shared memory segment |
 | 30 | `SYS_shmat` | Attach SysV shared memory segment |
 | 31 | `SYS_shmctl` | Control SysV shared memory segment |
@@ -327,8 +327,9 @@ The kernel implements over 100 POSIX system calls in [kernel/src/syscall/syscall
 | 53 | `SYS_socketpair` | Create pair of connected UNIX sockets |
 | 54 | `SYS_setsockopt` | Set options on socket |
 | 55 | `SYS_getsockopt` | Retrieve options from socket |
-| 56 | `SYS_clone` | Create thread/process (`CLONE_VM`, `CLONE_THREAD`, `CLONE_FS`) |
+| 56 | `SYS_clone` | Create thread/process (`CLONE_VM`, `CLONE_THREAD`, `CLONE_FS`, `CLONE_VFORK` suspends parent) |
 | 57 | `SYS_fork` | Fork child process with COW address space clone |
+| 58 | `SYS_vfork` | Fork with parent blocked until child execs/exits (COW; safe superset of shared-VM vfork) |
 | 59 | `SYS_execve` | Execute ELF binary with arguments and environment |
 | 60 | `SYS_exit` | Terminate calling thread / process |
 | 61 | `SYS_wait4` | Wait for state changes in child processes |
@@ -390,7 +391,7 @@ The kernel implements over 100 POSIX system calls in [kernel/src/syscall/syscall
 | 140 | `SYS_getpriority` | Get program scheduling priority |
 | 141 | `SYS_setpriority` | Set program scheduling priority |
 | 156 | `SYS_sysctl` | Read or write system control parameters |
-| 157 | `SYS_prctl` | Thread name (`PR_SET_NAME` / `PR_GET_NAME`) and `PR_SET_NO_NEW_PRIVS` / `PR_GET_NO_NEW_PRIVS` |
+| 157 | `SYS_prctl` | Thread name (`PR_SET_NAME` / `PR_GET_NAME`), `PR_SET_NO_NEW_PRIVS` / `PR_GET_NO_NEW_PRIVS`, `PR_SET_PDEATHSIG` / `PR_GET_PDEATHSIG`, `PR_SET_DUMPABLE` / `PR_GET_DUMPABLE` (seccomp options return `-EINVAL`) |
 | 158 | `SYS_arch_prctl` | Set architecture-specific thread state (`FS_BASE` / `GS_BASE`) |
 | 160 | `SYS_setrlimit` | Set process resource limits |
 | 162 | `SYS_sync` | Synchronize cached filesystem buffers to disk |
@@ -401,16 +402,19 @@ The kernel implements over 100 POSIX system calls in [kernel/src/syscall/syscall
 | 176 | `SYS_delete_module`| Unload kernel module |
 | 178 | `SYS_getprocs` | Retrieve process table snapshot |
 | 186 | `SYS_gettid` | Get thread ID |
-| 200 | `SYS_tkill` | Send signal to specific thread |
+| 200 | `SYS_tkill` | Send thread-private signal to a thread of the current process |
 | 201 | `SYS_time` | Get current Unix epoch timestamp (seconds) |
 | 202 | `SYS_futex` | Fast user-space locking (`FUTEX_WAIT`, `FUTEX_WAKE`) |
-| 204 | `SYS_sched_getaffinity` | Report the CPU mask (all online CPUs; threads are not pinned) |
+| 204 | `SYS_sched_getaffinity` | Report the CPU mask (all online CPUs; threads are not pinned; `len >= 8` accepted, tail zero-filled) |
+| 273 | `SYS_set_robust_list` | Register robust futex list head (cleanup marks `FUTEX_OWNER_DIED` on thread exit) |
+| 274 | `SYS_get_robust_list` | Retrieve robust futex list head |
 | 218 | `SYS_set_tid_address`| Set pointer to thread ID for clear_child_tid |
 | 227 | `SYS_clock_settime`| Set clock time |
 | 228 | `SYS_clock_gettime`| Retrieve clock time (`CLOCK_REALTIME`, `CLOCK_MONOTONIC`) |
 | 229 | `SYS_clock_getres` | Retrieve clock resolution |
 | 230 | `SYS_clock_nanosleep`| High-precision clock sleep with flags |
 | 231 | `SYS_exit_group` | Exit all threads in process |
+| 234 | `SYS_tgkill` | Send thread-private signal to a thread of a given process |
 | 232 | `SYS_epoll_wait` | Wait for I/O events on an epoll file descriptor |
 | 233 | `SYS_epoll_ctl` | Control interface for an epoll file descriptor |
 | 235 | `SYS_utimes` | Change file timestamps |
@@ -441,7 +445,10 @@ The kernel implements over 100 POSIX system calls in [kernel/src/syscall/syscall
 | 293 | `SYS_pipe2` | Create unidirectional IPC pipe with atomic flags |
 | 294 | `SYS_inotify_init1`| Initialize inotify instance with flags |
 | 318 | `SYS_getrandom` | Obtain random bytes from kernel CSPRNG |
-| 319 | `SYS_memfd_create` | Create anonymous in-memory file descriptor |
+| 317 | `SYS_seccomp` | Always returns `-EINVAL` (no seccomp-bpf; lets sandboxes detect absence) |
+| 319 | `SYS_memfd_create` | Create anonymous in-memory file descriptor (`MFD_NOEXEC_SEAL`/`MFD_EXEC` accepted; `F_ADD_SEALS`/`F_GET_SEALS` via `fcntl`) |
+| 334 | `SYS_rseq` | Per-thread restartable sequences (registers `cpu_id`, updated on context switch) |
+| 435 | `SYS_clone3` | Extended thread/process creation (`struct clone_args`; wrapper over `clone`/`fork`) |
 | 362 | `SYS_kqueue` | Allocate kernel event notification queue |
 | 363 | `SYS_kevent` | Register events and receive pending notifications |
 

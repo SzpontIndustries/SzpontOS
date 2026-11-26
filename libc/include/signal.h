@@ -104,6 +104,8 @@ struct sigaction {
 };
 
 int kill(pid_t pid, int sig);
+int tkill(int tid, int sig);
+int tgkill(pid_t tgid, int tid, int sig);
 int raise(int sig);
 sighandler_t signal(int signum, sighandler_t handler);
 int sigaction(int signum, const struct sigaction *act, struct sigaction *oldact);

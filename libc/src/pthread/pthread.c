@@ -10,6 +10,7 @@
 #include <unistd.h>
 #include <errno.h>
 #include <sched.h>
+#include <signal.h>
 #include <sys/syscall.h>
 
 #define ARCH_SET_FS 0x1002
@@ -18,6 +19,7 @@
 
 extern int __clone(int (*fn)(void *), void *child_stack, int flags, void *arg, int *ptid, void *tls, int *ctid);
 extern int64_t __syscall1(int64_t num, int64_t a1);
+extern int64_t __syscall3(int64_t num, int64_t a1, int64_t a2, int64_t a3);
 extern int64_t __syscall4(int64_t num, int64_t a1, int64_t a2, int64_t a3, int64_t a4);
 
 static inline int futex_wait(volatile int *addr, int val, const struct timespec *to) {
@@ -57,6 +59,7 @@ typedef struct __pthread_internal {
     void *retval;
     int detached;
     volatile int clear_child_tid;
+    volatile int ready; /* Publication gate: child spins until parent stores tids */
     void *stack_base;
     size_t stack_size;
     void *tsd[MAX_PTHREAD_KEYS];
@@ -109,6 +112,17 @@ static int __pthread_trampoline(void *arg) {
     /* Set TLS base pointer (%fs:0) */
     arch_prctl(ARCH_SET_FS, (unsigned long)t);
 
+    /* Publication gate: wait until the creator has stored tids and linked
+     * us into the thread list. Prevents exit-before-publish races where the
+     * child clears clear_child_tid before the parent records it. */
+    int spins = 0;
+    while (__atomic_load_n(&t->ready, __ATOMIC_ACQUIRE) == 0) {
+        __builtin_ia32_pause();
+        if (++spins > 100000000) {
+            break; /* Failsafe: never hang forever on a dead creator. */
+        }
+    }
+
     void *ret = t->start_routine(t->arg);
     pthread_exit(ret);
     return 0;
@@ -148,6 +162,7 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
                 CLONE_CHILD_CLEARTID;
 
     int child_tid = 0;
+    __atomic_store_n(&t->ready, 0, __ATOMIC_RELAXED);
     int res = __clone(__pthread_trampoline, (void *)stack_top, flags, t, &child_tid, t, (int *)&t->clear_child_tid);
     if (res < 0) {
         free(t);
@@ -166,6 +181,10 @@ int pthread_create(pthread_t *thread, const pthread_attr_t *attr, void *(*start_
     t->next = g_thread_list;
     g_thread_list = t;
     __sync_lock_release(&g_list_lock);
+
+    /* Publish: the child spins in the trampoline until tids and the list
+     * link are visible, so it can neither exit nor clear the TID word early. */
+    __atomic_store_n(&t->ready, 1, __ATOMIC_RELEASE);
 
     return 0;
 }
@@ -225,9 +244,15 @@ int pthread_join(pthread_t thread, void **retval) {
     if (curr->detached)
         return EINVAL;
 
-    /* Wait on clear_child_tid futex until the child thread exits */
-    while (curr->clear_child_tid != 0) {
-        futex_wait(&curr->clear_child_tid, curr->clear_child_tid, NULL);
+    /* Wait on clear_child_tid futex until the child thread exits.
+     * Atomic snapshot + value-checked wait: the kernel clears the word then
+     * wakes, so a mismatch means "already exited" (EAGAIN) and a match means
+     * we are queued before any future clear. No missed wake either way. */
+    for (;;) {
+        int observed = __atomic_load_n(&curr->clear_child_tid, __ATOMIC_ACQUIRE);
+        if (observed == 0)
+            break;
+        futex_wait(&curr->clear_child_tid, observed, NULL);
     }
 
     if (retval) {
@@ -276,6 +301,27 @@ int pthread_detach(pthread_t thread) {
 
 pthread_t pthread_self(void) {
     return get_current_thread()->tid;
+}
+
+int pthread_kill(pthread_t thread, int sig) {
+    if (sig < 0 || sig >= NSIG)
+        return EINVAL;
+    pthread_init_main_thread();
+    /* Verify the thread belongs to this process before trapping to kernel. */
+    while (__sync_lock_test_and_set(&g_list_lock, 1)) {
+        __builtin_ia32_pause();
+    }
+    pthread_internal_t *curr = g_thread_list;
+    while (curr && curr->tid != thread) {
+        curr = curr->next;
+    }
+    __sync_lock_release(&g_list_lock);
+    if (!curr)
+        return ESRCH;
+    long ret = __syscall3(SYS_tgkill, (int64_t)getpid(), (int64_t)thread, (int64_t)sig);
+    if (ret < 0)
+        return (ret == -3) ? ESRCH : EINVAL;
+    return 0;
 }
 
 int pthread_equal(pthread_t t1, pthread_t t2) {

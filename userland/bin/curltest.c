@@ -1,5 +1,5 @@
 /*
- * SzpontOS - /bin/curltest (cURL Diagnostic Tool)
+ * SzpontOS - /usr/tbin/curltest (cURL Diagnostic Tool)
  * (C) Copyright by Szpont Industries. All rights reserved.
  */
 
